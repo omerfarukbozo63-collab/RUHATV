@@ -86,7 +86,7 @@ jobs:
             echo "HATA: KEYSTORE_BASE64 secret tanimli degil. Once anahtar-uret adimini yapip 4 secret ekleyin."
             exit 1
           fi
-          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          echo "$KEYSTORE_BASE64" | sed 's/^KEYSTORE_BASE64=//' | tr -d ' \r\n"' | base64 -d > "$RUNNER_TEMP/upload.jks"
       - name: Imzali AAB ve APK derle
         env:
           KEYSTORE_FILE: ${{ runner.temp }}/upload.jks
