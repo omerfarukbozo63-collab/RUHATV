@@ -4,14 +4,36 @@ plugins {
 
 android {
     namespace 'com.tvoynatici.app'
-    compileSdk 34
+    compileSdk 36
 
     defaultConfig {
         applicationId "com.tvoynatici.app"
         minSdk 21
-        targetSdk 34
-        versionCode 1
+        targetSdk 36
+        // Her derlemede otomatik artar (Play her yuklemede daha buyuk numara ister)
+        versionCode (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInteger()
         versionName "1.0"
+    }
+
+    signingConfigs {
+        release {
+            def ksFile = System.getenv("KEYSTORE_FILE")
+            if (ksFile) {
+                storeFile file(ksFile)
+                storePassword System.getenv("KEYSTORE_PASSWORD")
+                keyAlias System.getenv("KEY_ALIAS")
+                keyPassword System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (System.getenv("KEYSTORE_FILE")) {
+                signingConfig signingConfigs.release
+            }
+        }
     }
 
     compileOptions {
