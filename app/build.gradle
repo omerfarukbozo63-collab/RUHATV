@@ -11,7 +11,7 @@ android {
         minSdk 21
         targetSdk 36
         // Her derlemede otomatik artar (Play her yuklemede daha buyuk numara ister)
-        versionCode (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInteger()
+        versionCode Integer.parseInt(System.getenv("GITHUB_RUN_NUMBER") ?: "1")
         versionName "1.0"
     }
 
