@@ -1,0 +1,19 @@
+APK NASIL ALINIR (bilgisayara program kurmadan)
+
+1) github.com'da ucretsiz hesap acin.
+2) Sag ustte "+" > "New repository" > bir isim verin (ornek: tv) > "Create repository".
+3) "uploading an existing file" baglantisina tiklayin.
+4) Bu zip'i ACIN, icindeki TUM dosya ve klasorleri (.github klasoru dahil) surukleyip birakin.
+   NOT: .github klasoru gizli olabilir. Gorunmuyorsa Windows'ta Gorunum > Gizli ogeler'i acin.
+5) "Commit changes" tiklayin.
+6) Ustteki "Actions" sekmesine girin. "APK Derle" calisir (3-6 dk surer).
+7) Yesil tik cikinca ise tiklayin, sayfanin altindaki "Artifacts" bolumunden
+   "TV-Oynatici-APK" dosyasini indirin. Zip icinden app-debug.apk cikar.
+
+TV'YE YUKLEME
+- APK'yi USB belege koyup TV'ye takin, bir dosya yoneticisi ile acin
+  VEYA TV'ye "Downloader" uygulamasini kurup APK'yi link ile indirin.
+- "Bilinmeyen kaynaklardan yukleme" iznini acmaniz istenebilir.
+
+YAYIN LINKINI DEGISTIRMEK
+app/src/main/java/com/tvoynatici/app/MainActivity.java dosyasinda STREAM_URL satirini duzenleyin.
