@@ -59,6 +59,9 @@ public class MainActivity extends Activity {
     // Acilis gorselinin linki: yayin.txt ile ayni Gist'teki "acilis.txt" dosyasi
     private static final String SPLASH_CFG_URL = CONFIG_URL.replace("yayin.txt", "acilis.txt");
 
+    // Sosyal medya listesi: yayin.txt ile ayni Gist'teki "sosyal.txt" dosyasi
+    private static final String SOCIAL_CFG_URL = CONFIG_URL.replace("yayin.txt", "sosyal.txt");
+
     // Genel bilgi ekrani metni: "bilgi.txt" dosyasi (ayri Gist)
     private static final String INFO_URL =
             "https://gist.githubusercontent.com/omerfarukbozo63-collab/6a42452f27938d3837147c39ebe42e9d/raw/bilgi.txt";
@@ -104,6 +107,15 @@ public class MainActivity extends Activity {
     private View socialOverlay, socialBar;
     private LinearLayout socialList;
     private boolean socialVisible = false;
+    // Satir: {isim, kullanici adi, platform, link}. Uzaktan gelen liste bunun yerine gecer.
+    private String[][] socialItems = {
+            {"Ruha TV", "@ruhatv", "Instagram", "https://www.instagram.com/ruhatv"},
+            {"Urfa Haber", "@urfa_haber", "Instagram", "https://www.instagram.com/urfa_haber/"},
+            {"Ruha TV", "@ruhatvtr", "X", "https://x.com/ruhatvtr"},
+            {"Urfa Haber Net", "@UrfahaberNet", "X", "https://x.com/UrfahaberNet"},
+            {"Ruha TV", "Ruhatv1", "YouTube", "https://www.youtube.com/user/Ruhatv1"},
+            {"Urfa Haber Net", "urfahabernet", "Facebook", "https://www.facebook.com/urfahabernet"},
+    };
     private static final long SOCIAL_MS = 10000;   // panel bu sure sonra kendiliginden kapanir
 
     // 0: Sigdir, 1: Doldur (kirp), 2: Uzat; digerleri sabit oran
@@ -618,6 +630,9 @@ public class MainActivity extends Activity {
             }
         }
 
+        // 4) Sosyal medya listesi
+        fetchSocialBlocking();
+
         // 3) Acilis gorseli (bir sonraki acilista gorunur)
         String sp = httpGet(SPLASH_CFG_URL);
         if (sp != null) {
@@ -646,6 +661,20 @@ public class MainActivity extends Activity {
                 }
             }
         }
+    }
+
+    private void fetchSocialBlocking() {
+        String so = httpGet(SOCIAL_CFG_URL);
+        if (so == null) return;
+        final String raw = so.trim();
+        final String[][] parsed = parseSocial(raw);
+        if (parsed.length == 0) return;
+        handler.post(() -> {
+            if (raw.equals(prefs.getString("social", ""))) return;
+            prefs.edit().putString("social", raw).apply();
+            socialItems = parsed;
+            if (!isTv && socialList != null) buildSocialRows();
+        });
     }
 
     private boolean downloadSplash(String urlStr) {
@@ -830,6 +859,11 @@ public class MainActivity extends Activity {
             showSocial();
         });
         findViewById(R.id.social_wrap).setOnClickListener(v -> hideSocial());
+        String cachedSocial = prefs.getString("social", "");
+        if (!cachedSocial.isEmpty()) {
+            String[][] parsed = parseSocial(cachedSocial);
+            if (parsed.length > 0) socialItems = parsed;
+        }
         buildSocialRows();
 
         // Bilgi ekrani: telefona gore boyut, kapat dugmesi, dokununca kapanma
@@ -1001,17 +1035,53 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------------ Sosyal medya
 
+    private int iconFor(String platform) {
+        String p = platform.toLowerCase();
+        if (p.contains("insta")) return R.drawable.ic_instagram;
+        if (p.equals("x") || p.contains("twitter")) return R.drawable.ic_x;
+        if (p.contains("youtube")) return R.drawable.ic_youtube;
+        if (p.contains("facebook")) return R.drawable.ic_facebook;
+        return R.drawable.ic_heart;
+    }
+
+    // sosyal.txt satirlari: "Isim | @kullanici | Platform | link"  ya da sadece "link"
+    private String[][] parseSocial(String text) {
+        java.util.ArrayList<String[]> out = new java.util.ArrayList<>();
+        for (String line : text.replace("\uFEFF", "").replace("\r", "").split("\n")) {
+            line = line.trim();
+            if (line.isEmpty() || line.startsWith("#")) continue;
+            String[] parts = line.split("\\|");
+            for (int i = 0; i < parts.length; i++) parts[i] = parts[i].trim();
+            String url = parts[parts.length - 1];
+            if (!url.startsWith("http")) continue;
+            String name;
+            String handle;
+            String platform;
+            if (parts.length >= 4) {
+                name = parts[0];
+                handle = parts[1];
+                platform = parts[2];
+            } else {
+                String host = url.replaceFirst("^https?://(www\\.)?", "");
+                String last = host.contains("/") ? host.substring(host.indexOf('/') + 1) : "";
+                last = last.replaceAll("/+$", "");
+                if (last.contains("/")) last = last.substring(last.lastIndexOf('/') + 1);
+                platform = host.startsWith("instagram") ? "Instagram"
+                        : host.startsWith("x.com") || host.startsWith("twitter") ? "X"
+                        : host.startsWith("youtube") ? "YouTube"
+                        : host.startsWith("facebook") ? "Facebook" : "Web";
+                handle = last.isEmpty() ? host : "@" + last;
+                name = last.isEmpty() ? host : last;
+            }
+            out.add(new String[]{name, handle, platform, url});
+            if (out.size() >= 12) break;
+        }
+        return out.toArray(new String[0][]);
+    }
+
     private void buildSocialRows() {
-        String[][] items = {
-                {"Ruha TV", "@ruhatv", "Instagram", "https://www.instagram.com/ruhatv"},
-                {"Urfa Haber Net", "@urfahabernet", "Instagram", "https://www.instagram.com/urfahabernet"},
-                {"Ruha TV", "@ruhatvtr", "X", "https://x.com/ruhatvtr"},
-                {"Urfa Haber Net", "@UrfahaberNet", "X", "https://x.com/UrfahaberNet"},
-                {"Ruha TV", "Ruhatv1", "YouTube", "https://www.youtube.com/user/Ruhatv1"},
-                {"Urfa Haber Net", "urfahabernet", "Facebook", "https://www.facebook.com/urfahabernet"},
-        };
-        int[] icons = {R.drawable.ic_instagram, R.drawable.ic_instagram, R.drawable.ic_x,
-                R.drawable.ic_x, R.drawable.ic_youtube, R.drawable.ic_facebook};
+        String[][] items = socialItems;
+        socialList.removeAllViews();
 
         for (int i = 0; i < items.length; i++) {
             final String url = items[i][3];
@@ -1025,7 +1095,7 @@ public class MainActivity extends Activity {
             row.setOnClickListener(v -> openLink(url));
 
             ImageView ic = new ImageView(this);
-            ic.setImageResource(icons[i]);
+            ic.setImageResource(iconFor(items[i][2]));
             row.addView(ic, new LinearLayout.LayoutParams((int) dp(40), (int) dp(40)));
 
             LinearLayout col = new LinearLayout(this);
