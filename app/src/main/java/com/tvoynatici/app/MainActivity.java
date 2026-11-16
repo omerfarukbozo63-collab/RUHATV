@@ -3,6 +3,13 @@ package com.tvoynatici.app;
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.app.Activity;
+import android.app.PictureInPictureParams;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Build;
+import android.util.Rational;
+import android.view.MotionEvent;
+import android.widget.LinearLayout;
 import android.app.UiModeManager;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -90,6 +97,14 @@ public class MainActivity extends Activity {
     private AudioManager audio;
     private boolean controlsVisible = false;
     private int aspectIndex = 0;
+    private boolean inPip = false;
+    private ImageView btnMute;
+
+    // Sosyal medya paneli
+    private View socialOverlay, socialBar;
+    private LinearLayout socialList;
+    private boolean socialVisible = false;
+    private static final long SOCIAL_MS = 10000;   // panel bu sure sonra kendiliginden kapanir
 
     // 0: Sigdir, 1: Doldur (kirp), 2: Uzat; digerleri sabit oran
     private static final String[] ASPECT_NAMES =
@@ -119,6 +134,7 @@ public class MainActivity extends Activity {
     private final Runnable showWaitTask = this::showWait;
     private final Runnable hideInfoTask = this::hideInfo;
     private final Runnable hideControlsTask = this::hideControls;
+    private final Runnable hideSocialTask = this::hideSocial;
     private final Runnable hideVolumeTask = () ->
             volumeRing.animate().alpha(0f).scaleX(0.9f).scaleY(0.9f).setDuration(350).start();
     private final Runnable hideLiveTask = () ->
@@ -161,6 +177,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
+        inPip = Build.VERSION.SDK_INT >= 26 && isInPictureInPictureMode();
         startPlayer();
         if (splashDone) {
             splashLayer.setVisibility(View.GONE);
@@ -172,6 +189,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onStop() {
         super.onStop();
+        // Mini oynatici acikken yayin kesilmez
+        if (Build.VERSION.SDK_INT >= 26 && isInPictureInPictureMode()) return;
+        inPip = false;
         stopPlayer();
     }
 
@@ -251,6 +271,8 @@ public class MainActivity extends Activity {
         hideWaitNow();
         controlsVisible = false;
         touchControls.setVisibility(View.GONE);
+        socialVisible = false;
+        socialOverlay.setVisibility(View.GONE);
         if (player != null) {
             playerView.setPlayer(null);
             player.release();
@@ -467,6 +489,7 @@ public class MainActivity extends Activity {
             }
         }
         applyVolume();
+        updateMuteIcon();
         showVolume();
     }
 
@@ -501,6 +524,11 @@ public class MainActivity extends Activity {
                 || code == KeyEvent.KEYCODE_VOLUME_DOWN
                 || code == KeyEvent.KEYCODE_VOLUME_MUTE) {
             if (down) handleVolumeKey(code);
+            return true;
+        }
+
+        if (socialVisible && down && code == KeyEvent.KEYCODE_BACK) {
+            hideSocial();
             return true;
         }
 
@@ -705,6 +733,10 @@ public class MainActivity extends Activity {
         touchControls = findViewById(R.id.touch_controls);
         aspectMenu = findViewById(R.id.aspect_menu);
         aspectChip = findViewById(R.id.aspect_chip);
+        btnMute = findViewById(R.id.btn_mute);
+        socialOverlay = findViewById(R.id.social_overlay);
+        socialBar = findViewById(R.id.social_bar);
+        socialList = findViewById(R.id.social_list);
 
         volumeRing.setOnLevelChangeListener(new VolumeRingView.Listener() {
             @Override
@@ -723,6 +755,7 @@ public class MainActivity extends Activity {
                     }
                 }
                 applyVolume();
+                updateMuteIcon();
             }
 
             @Override
@@ -770,6 +803,56 @@ public class MainActivity extends Activity {
             scheduleHideControls();
         });
 
+        // Sesi tamamen kapat / ac
+        btnMute.setOnClickListener(v -> {
+            muted = !muted;
+            applyVolume();
+            updateMuteIcon();
+            showVolume();
+            scheduleHideControls();
+        });
+        updateMuteIcon();
+
+        // Mini oynatici (Android 8+)
+        View btnPip = findViewById(R.id.btn_pip);
+        if (Build.VERSION.SDK_INT < 26) {
+            btnPip.setVisibility(View.GONE);
+        } else {
+            btnPip.setOnClickListener(v -> {
+                hideControls();
+                enterPip();
+            });
+        }
+
+        // Sosyal medya paneli
+        findViewById(R.id.btn_social).setOnClickListener(v -> {
+            hideControls();
+            showSocial();
+        });
+        findViewById(R.id.social_wrap).setOnClickListener(v -> hideSocial());
+        buildSocialRows();
+
+        // Bilgi ekrani: telefona gore boyut, kapat dugmesi, dokununca kapanma
+        FrameLayout.LayoutParams ilp = (FrameLayout.LayoutParams) infoCard.getLayoutParams();
+        ilp.setMargins((int) dp(16), (int) dp(36), (int) dp(16), (int) dp(36));
+        infoCard.setLayoutParams(ilp);
+        infoCard.setPadding((int) dp(20), (int) dp(16), (int) dp(20), (int) dp(14));
+        infoTitle.setTextSize(24);
+        infoBody.setTextSize(17);
+        ((TextView) findViewById(R.id.info_hint)).setText("Kaydırmak için sürükleyin");
+        View infoLogo = findViewById(R.id.info_logo);
+        float heightDp = getResources().getDisplayMetrics().heightPixels
+                / getResources().getDisplayMetrics().density;
+        if (heightDp < 500) {
+            infoLogo.setVisibility(View.GONE);   // yatay telefonda metne yer ac
+        } else {
+            infoLogo.getLayoutParams().height = (int) dp(44);
+        }
+        View infoClose = findViewById(R.id.info_close);
+        infoClose.setVisibility(View.VISIBLE);
+        infoClose.setOnClickListener(v -> hideInfo());
+        infoOverlay.setOnClickListener(v -> hideInfo());
+
         root.setOnClickListener(v -> {
             if (!splashDone) return;
             if (infoVisible) {
@@ -785,7 +868,7 @@ public class MainActivity extends Activity {
         });
 
         root.addOnLayoutChangeListener((v, l, t, r, b, oldL, oldT, oldR, oldB) -> {
-            if ((r - l) != (oldR - oldL) || (b - t) != (oldB - oldT)) applyAspect(aspectIndex);
+            if ((r - l) != (oldR - oldL) || (b - t) != (oldB - oldT)) applyAspectLayout(aspectIndex);
         });
     }
 
@@ -818,6 +901,11 @@ public class MainActivity extends Activity {
         aspectIndex = idx;
         prefs.edit().putInt("aspect", idx).apply();
         aspectChip.setText(ASPECT_NAMES[idx] + " ▾");
+        applyAspectLayout(idx);
+    }
+
+    private void applyAspectLayout(int idx) {
+        if (inPip) idx = 0;   // mini oynaticida her zaman sigdir
 
         FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) playerView.getLayoutParams();
         lp.gravity = Gravity.CENTER;
@@ -863,6 +951,186 @@ public class MainActivity extends Activity {
             t.setTypeface(null, i == aspectIndex ? android.graphics.Typeface.BOLD
                     : android.graphics.Typeface.NORMAL);
         }
+    }
+
+    // ------------------------------------------------------------------ Mini oynatici
+
+    @Override
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        enterPip();   // uygulamadan cikinca (ana ekran tusu vb.) mini oynaticiya gec
+    }
+
+    private void enterPip() {
+        if (isTv || Build.VERSION.SDK_INT < 26 || !splashDone || player == null || inPip) return;
+        try {
+            PictureInPictureParams params = new PictureInPictureParams.Builder()
+                    .setAspectRatio(new Rational(16, 9))
+                    .build();
+            enterPictureInPictureMode(params);
+        } catch (Throwable ignored) {
+            // Cihaz desteklemiyorsa ya da kullanici izin vermediyse sessizce gec
+        }
+    }
+
+    @Override
+    public void onPictureInPictureModeChanged(boolean isInPip, Configuration newConfig) {
+        super.onPictureInPictureModeChanged(isInPip, newConfig);
+        inPip = isInPip;
+        if (isTv) return;
+        if (isInPip) {
+            handler.removeCallbacks(hideControlsTask);
+            controlsVisible = false;
+            touchControls.setVisibility(View.GONE);
+            aspectMenu.setVisibility(View.GONE);
+            infoVisible = false;
+            infoOverlay.setVisibility(View.GONE);
+            hideSocialNow();
+            volumeRing.setAlpha(0f);
+            liveBadge.setVisibility(View.GONE);
+        }
+        applyAspectLayout(aspectIndex);
+    }
+
+    // ------------------------------------------------------------------ Ses kapat ikonu
+
+    private void updateMuteIcon() {
+        if (btnMute == null) return;
+        btnMute.setColorFilter(muted ? 0xFF1DE9D0 : 0xFFFFFFFF);
+    }
+
+    // ------------------------------------------------------------------ Sosyal medya
+
+    private void buildSocialRows() {
+        String[][] items = {
+                {"Ruha TV", "@ruhatv", "Instagram", "https://www.instagram.com/ruhatv"},
+                {"Urfa Haber Net", "@urfahabernet", "Instagram", "https://www.instagram.com/urfahabernet"},
+                {"Ruha TV", "@ruhatvtr", "X", "https://x.com/ruhatvtr"},
+                {"Urfa Haber Net", "@UrfahaberNet", "X", "https://x.com/UrfahaberNet"},
+                {"Ruha TV", "Ruhatv1", "YouTube", "https://www.youtube.com/user/Ruhatv1"},
+                {"Urfa Haber Net", "urfahabernet", "Facebook", "https://www.facebook.com/urfahabernet"},
+        };
+        int[] icons = {R.drawable.ic_instagram, R.drawable.ic_instagram, R.drawable.ic_x,
+                R.drawable.ic_x, R.drawable.ic_youtube, R.drawable.ic_facebook};
+
+        for (int i = 0; i < items.length; i++) {
+            final String url = items[i][3];
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setBackgroundResource(R.drawable.bg_row);
+            row.setPadding((int) dp(12), (int) dp(10), (int) dp(14), (int) dp(10));
+            row.setClickable(true);
+            row.setOnClickListener(v -> openLink(url));
+
+            ImageView ic = new ImageView(this);
+            ic.setImageResource(icons[i]);
+            row.addView(ic, new LinearLayout.LayoutParams((int) dp(40), (int) dp(40)));
+
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            clp.leftMargin = (int) dp(14);
+
+            TextView name = new TextView(this);
+            name.setText(items[i][0]);
+            name.setTextColor(0xFFFFFFFF);
+            name.setTextSize(17);
+            name.setTypeface(null, android.graphics.Typeface.BOLD);
+            col.addView(name);
+
+            TextView sub = new TextView(this);
+            sub.setText(items[i][1] + "  ·  " + items[i][2]);
+            sub.setTextColor(0xB3FFFFFF);
+            sub.setTextSize(13);
+            col.addView(sub);
+            row.addView(col, clp);
+
+            TextView arrow = new TextView(this);
+            arrow.setText("›");
+            arrow.setTextColor(0xFF1DE9D0);
+            arrow.setTextSize(28);
+            row.addView(arrow);
+
+            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            rlp.topMargin = (int) dp(10);
+            socialList.addView(row, rlp);
+        }
+    }
+
+    private void openLink(String url) {
+        hideSocial();
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Exception ignored) {
+            // Linki acacak uygulama ya da tarayici yoksa sessizce gec
+        }
+    }
+
+    private void showSocial() {
+        if (socialVisible || !splashDone) return;
+        socialVisible = true;
+        socialOverlay.animate().cancel();
+        socialOverlay.setAlpha(0f);
+        socialOverlay.setVisibility(View.VISIBLE);
+        socialOverlay.animate().alpha(1f).setDuration(250).start();
+
+        // Satirlar sirayla asagidan yukari belirir
+        for (int i = 0; i < socialList.getChildCount(); i++) {
+            View c = socialList.getChildAt(i);
+            c.animate().cancel();
+            c.setAlpha(0f);
+            c.setTranslationY(dp(22));
+            c.animate().alpha(1f).translationY(0f)
+                    .setStartDelay(120L + 80L * i).setDuration(280).start();
+        }
+        restartSocialTimer();
+    }
+
+    private void restartSocialTimer() {
+        handler.removeCallbacks(hideSocialTask);
+        socialBar.animate().cancel();
+        socialBar.setPivotX(0f);
+        socialBar.setScaleX(1f);
+        socialBar.animate().scaleX(0f).setDuration(SOCIAL_MS)
+                .setInterpolator(new LinearInterpolator()).start();
+        handler.postDelayed(hideSocialTask, SOCIAL_MS);
+    }
+
+    private void hideSocial() {
+        if (!socialVisible) return;
+        socialVisible = false;
+        handler.removeCallbacks(hideSocialTask);
+        socialBar.animate().cancel();
+        socialOverlay.animate().cancel();
+        socialOverlay.animate().alpha(0f).setDuration(220).withEndAction(() -> {
+            if (!socialVisible) socialOverlay.setVisibility(View.GONE);
+        }).start();
+    }
+
+    private void hideSocialNow() {
+        socialVisible = false;
+        handler.removeCallbacks(hideSocialTask);
+        socialBar.animate().cancel();
+        socialOverlay.animate().cancel();
+        socialOverlay.setVisibility(View.GONE);
+    }
+
+    // Panel acikken ya da menu acikken dokunus olursa kapanma suresi yeniden baslar
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        if (ev.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            if (socialVisible) restartSocialTimer();
+            if (infoVisible && !isTv) {
+                handler.removeCallbacks(hideInfoTask);
+                handler.postDelayed(hideInfoTask, 30000);
+            }
+            if (controlsVisible) scheduleHideControls();
+        }
+        return super.dispatchTouchEvent(ev);
     }
 
     // ------------------------------------------------------------------ Yardimcilar
