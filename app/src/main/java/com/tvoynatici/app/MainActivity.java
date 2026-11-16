@@ -3,17 +3,25 @@ package com.tvoynatici.app;
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.app.Activity;
+import android.app.UiModeManager;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.media.AudioManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.view.animation.AccelerateDecelerateInterpolator;
 import android.view.animation.LinearInterpolator;
+import android.widget.FrameLayout;
+import android.widget.GridLayout;
 import android.widget.ImageView;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -72,6 +80,22 @@ public class MainActivity extends Activity {
     private ImageView splashImage, waitLogo;
     private ScrollView infoScroll;
     private VolumeRingView volumeRing;
+
+    // Telefon (dokunmatik) kontrolleri
+    private FrameLayout root;
+    private View touchControls;
+    private GridLayout aspectMenu;
+    private TextView aspectChip;
+    private boolean isTv = false;
+    private AudioManager audio;
+    private boolean controlsVisible = false;
+    private int aspectIndex = 0;
+
+    // 0: Sigdir, 1: Doldur (kirp), 2: Uzat; digerleri sabit oran
+    private static final String[] ASPECT_NAMES =
+            {"Sığdır", "Doldur", "Uzat", "16:9", "4:3", "21:9", "18:9", "3:2", "1:1", "5:4"};
+    private static final float[] ASPECT_RATIO =
+            {0f, 0f, 0f, 16f / 9f, 4f / 3f, 21f / 9f, 2f, 1.5f, 1f, 1.25f};
     private ObjectAnimator textPulse, waitSpin, waitPulse;
 
     private String currentUrl;
@@ -94,6 +118,7 @@ public class MainActivity extends Activity {
     };
     private final Runnable showWaitTask = this::showWait;
     private final Runnable hideInfoTask = this::hideInfo;
+    private final Runnable hideControlsTask = this::hideControls;
     private final Runnable hideVolumeTask = () ->
             volumeRing.animate().alpha(0f).scaleX(0.9f).scaleY(0.9f).setDuration(350).start();
     private final Runnable hideLiveTask = () ->
@@ -129,6 +154,7 @@ public class MainActivity extends Activity {
                 prefs.getString("info_title", DEFAULT_INFO_TITLE),
                 prefs.getString("info_body", DEFAULT_INFO_BODY));
         loadCustomSplash();
+        setupPhoneControls();
         hideSystemUi();
     }
 
@@ -223,6 +249,8 @@ public class MainActivity extends Activity {
         splashProgress.animate().cancel();
         splashImage.animate().cancel();
         hideWaitNow();
+        controlsVisible = false;
+        touchControls.setVisibility(View.GONE);
         if (player != null) {
             playerView.setPlayer(null);
             player.release();
@@ -232,7 +260,14 @@ public class MainActivity extends Activity {
 
     private void applyVolume() {
         if (player == null) return;
-        float v = muted ? 0f : (float) Math.pow(volLevel / (double) VOL_MAX, 1.5);
+        float v;
+        if (muted) {
+            v = 0f;
+        } else if (isTv) {
+            v = (float) Math.pow(volLevel / (double) VOL_MAX, 1.5);   // TV: uygulama ici ses
+        } else {
+            v = 1f;   // Telefon: sesi telefonun ana ses seviyesi belirler
+        }
         player.setVolume(v);
     }
 
@@ -406,21 +441,45 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------------ Ses
 
     private void handleVolumeKey(int code) {
-        if (code == KeyEvent.KEYCODE_VOLUME_MUTE) {
-            muted = !muted;
-        } else if (code == KeyEvent.KEYCODE_VOLUME_UP) {
-            muted = false;
-            volLevel = Math.min(VOL_MAX, volLevel + VOL_STEP);
+        if (isTv || audio == null) {
+            if (code == KeyEvent.KEYCODE_VOLUME_MUTE) {
+                muted = !muted;
+            } else if (code == KeyEvent.KEYCODE_VOLUME_UP) {
+                muted = false;
+                volLevel = Math.min(VOL_MAX, volLevel + VOL_STEP);
+            } else {
+                volLevel = Math.max(0, volLevel - VOL_STEP);
+            }
+            prefs.edit().putInt("vol", volLevel).apply();
         } else {
-            volLevel = Math.max(0, volLevel - VOL_STEP);
+            // Telefon: gercek medya sesini degistir
+            try {
+                if (code == KeyEvent.KEYCODE_VOLUME_MUTE) {
+                    muted = !muted;
+                } else if (code == KeyEvent.KEYCODE_VOLUME_UP) {
+                    muted = false;
+                    audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, 0);
+                } else {
+                    audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, 0);
+                }
+            } catch (Exception ignored) {
+                // Sistem izin vermezse sessizce gec
+            }
         }
-        prefs.edit().putInt("vol", volLevel).apply();
         applyVolume();
         showVolume();
     }
 
+    // Gosterilecek ses seviyesi (0-63)
+    private int currentLevel() {
+        if (isTv || audio == null) return volLevel;
+        int max = Math.max(1, audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+        int cur = audio.getStreamVolume(AudioManager.STREAM_MUSIC);
+        return Math.round(cur * (float) VOL_MAX / max);
+    }
+
     private void showVolume() {
-        volumeRing.setLevel(muted ? 0 : volLevel, muted);
+        volumeRing.setLevel(muted ? 0 : currentLevel(), muted);
         volumeRing.animate().cancel();
         if (volumeRing.getAlpha() < 0.99f) {
             volumeRing.setScaleX(0.85f);
@@ -630,6 +689,180 @@ public class MainActivity extends Activity {
         player.prepare();
         player.setPlayWhenReady(splashDone);
         if (splashDone) showLiveBadge();
+    }
+
+    // ------------------------------------------------------------------ Telefon kontrolleri
+
+    private void setupPhoneControls() {
+        UiModeManager um = (UiModeManager) getSystemService(UI_MODE_SERVICE);
+        PackageManager pm = getPackageManager();
+        isTv = (um != null && um.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION)
+                || pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+                || !pm.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN);
+        audio = (AudioManager) getSystemService(AUDIO_SERVICE);
+
+        root = findViewById(R.id.root);
+        touchControls = findViewById(R.id.touch_controls);
+        aspectMenu = findViewById(R.id.aspect_menu);
+        aspectChip = findViewById(R.id.aspect_chip);
+
+        volumeRing.setOnLevelChangeListener(new VolumeRingView.Listener() {
+            @Override
+            public void onLevelChanged(int level) {
+                muted = false;
+                if (isTv || audio == null) {
+                    volLevel = level;
+                    prefs.edit().putInt("vol", level).apply();
+                } else {
+                    try {
+                        int max = Math.max(1, audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+                        int idx = Math.round(level * (float) max / VOL_MAX);
+                        audio.setStreamVolume(AudioManager.STREAM_MUSIC, idx, 0);
+                    } catch (Exception ignored) {
+                        // Sistem izin vermezse sessizce gec
+                    }
+                }
+                applyVolume();
+            }
+
+            @Override
+            public void onTouchChanged(boolean down) {
+                handler.removeCallbacks(hideVolumeTask);
+                if (!down) handler.postDelayed(hideVolumeTask, 1800);
+            }
+        });
+
+        if (isTv) return;   // Asagidakiler sadece telefon/tablet icin
+
+        aspectIndex = Math.max(0, Math.min(ASPECT_NAMES.length - 1, prefs.getInt("aspect", 0)));
+        aspectChip.setText(ASPECT_NAMES[aspectIndex] + " ▾");
+
+        for (int i = 0; i < ASPECT_NAMES.length; i++) {
+            final int idx = i;
+            TextView item = new TextView(this);
+            item.setText(ASPECT_NAMES[i]);
+            item.setTextSize(15);
+            item.setTextColor(0xFFFFFFFF);
+            item.setGravity(Gravity.CENTER);
+            item.setMinWidth((int) dp(92));
+            item.setPadding((int) dp(14), (int) dp(9), (int) dp(14), (int) dp(9));
+            item.setClickable(true);
+            item.setOnClickListener(v -> {
+                applyAspect(idx);
+                aspectMenu.setVisibility(View.GONE);
+                scheduleHideControls();
+            });
+            aspectMenu.addView(item, new GridLayout.LayoutParams());
+        }
+        refreshAspectMenu();
+
+        aspectChip.setOnClickListener(v -> {
+            aspectMenu.setVisibility(
+                    aspectMenu.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+            scheduleHideControls();
+        });
+        findViewById(R.id.btn_info).setOnClickListener(v -> {
+            hideControls();
+            showInfo();
+        });
+        findViewById(R.id.btn_volume).setOnClickListener(v -> {
+            showVolume();
+            scheduleHideControls();
+        });
+
+        root.setOnClickListener(v -> {
+            if (!splashDone) return;
+            if (infoVisible) {
+                hideInfo();
+            } else if (aspectMenu.getVisibility() == View.VISIBLE) {
+                aspectMenu.setVisibility(View.GONE);
+                scheduleHideControls();
+            } else if (controlsVisible) {
+                hideControls();
+            } else {
+                showControls();
+            }
+        });
+
+        root.addOnLayoutChangeListener((v, l, t, r, b, oldL, oldT, oldR, oldB) -> {
+            if ((r - l) != (oldR - oldL) || (b - t) != (oldB - oldT)) applyAspect(aspectIndex);
+        });
+    }
+
+    private void showControls() {
+        controlsVisible = true;
+        touchControls.animate().cancel();
+        touchControls.setAlpha(0f);
+        touchControls.setVisibility(View.VISIBLE);
+        touchControls.animate().alpha(1f).setDuration(200).start();
+        scheduleHideControls();
+    }
+
+    private void hideControls() {
+        controlsVisible = false;
+        handler.removeCallbacks(hideControlsTask);
+        aspectMenu.setVisibility(View.GONE);
+        touchControls.animate().cancel();
+        touchControls.animate().alpha(0f).setDuration(200).withEndAction(() -> {
+            if (!controlsVisible) touchControls.setVisibility(View.GONE);
+        }).start();
+    }
+
+    private void scheduleHideControls() {
+        handler.removeCallbacks(hideControlsTask);
+        handler.postDelayed(hideControlsTask, 4000);
+    }
+
+    // 0: sigdir, 1: doldur(kirp), 2: uzat, 3+: sabit oran
+    private void applyAspect(int idx) {
+        aspectIndex = idx;
+        prefs.edit().putInt("aspect", idx).apply();
+        aspectChip.setText(ASPECT_NAMES[idx] + " ▾");
+
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) playerView.getLayoutParams();
+        lp.gravity = Gravity.CENTER;
+        if (idx == 0) {
+            playerView.setResizeMode(0);   // FIT
+            lp.width = ViewGroup.LayoutParams.MATCH_PARENT;
+            lp.height = ViewGroup.LayoutParams.MATCH_PARENT;
+        } else if (idx == 1) {
+            playerView.setResizeMode(4);   // ZOOM
+            lp.width = ViewGroup.LayoutParams.MATCH_PARENT;
+            lp.height = ViewGroup.LayoutParams.MATCH_PARENT;
+        } else if (idx == 2) {
+            playerView.setResizeMode(3);   // FILL (uzat)
+            lp.width = ViewGroup.LayoutParams.MATCH_PARENT;
+            lp.height = ViewGroup.LayoutParams.MATCH_PARENT;
+        } else {
+            int rw = root.getWidth();
+            int rh = root.getHeight();
+            if (rw > 0 && rh > 0) {
+                float ratio = ASPECT_RATIO[idx];
+                int w;
+                int h;
+                if ((float) rw / rh > ratio) {
+                    h = rh;
+                    w = Math.round(h * ratio);
+                } else {
+                    w = rw;
+                    h = Math.round(w / ratio);
+                }
+                lp.width = w;
+                lp.height = h;
+            }
+            playerView.setResizeMode(3);
+        }
+        playerView.setLayoutParams(lp);
+        refreshAspectMenu();
+    }
+
+    private void refreshAspectMenu() {
+        for (int i = 0; i < aspectMenu.getChildCount(); i++) {
+            TextView t = (TextView) aspectMenu.getChildAt(i);
+            t.setTextColor(i == aspectIndex ? 0xFF1DE9D0 : 0xFFFFFFFF);
+            t.setTypeface(null, i == aspectIndex ? android.graphics.Typeface.BOLD
+                    : android.graphics.Typeface.NORMAL);
+        }
     }
 
     // ------------------------------------------------------------------ Yardimcilar
