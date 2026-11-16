@@ -4,13 +4,17 @@ import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.animation.AccelerateDecelerateInterpolator;
 import android.view.animation.LinearInterpolator;
+import android.widget.ImageView;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
@@ -24,6 +28,9 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.ui.PlayerView;
 
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -33,6 +40,9 @@ public class MainActivity extends Activity {
     // Uzak ayar dosyasi: icinde sadece yayin linki yazar (Gist "yayin.txt")
     private static final String CONFIG_URL =
             "https://gist.githubusercontent.com/omerfarukbozo63-collab/3f0ffd3629d37767b6034f27ae461631/raw/yayin.txt";
+
+    // Acilis gorselinin linki: yayin.txt ile ayni Gist'teki "acilis.txt" dosyasi
+    private static final String SPLASH_CFG_URL = CONFIG_URL.replace("yayin.txt", "acilis.txt");
 
     // Genel bilgi ekrani metni: "bilgi.txt" dosyasi (ayri Gist)
     private static final String INFO_URL =
@@ -46,8 +56,9 @@ public class MainActivity extends Activity {
     private static final String DEFAULT_INFO_BODY =
             "Ruha TV'ye hoş geldiniz.\n\nBu ekranın yazısı uzaktan güncellenebilir.";
 
-    private static final long POLL_MS = 60000;     // ayar dosyasi kontrol araligi
+    private static final long POLL_MS = 60000;     // ayar dosyalari kontrol araligi
     private static final long SPLASH_MS = 6000;    // acilis animasyonu suresi
+    private static final long MAX_IMG_BYTES = 8L * 1024 * 1024;
     private static final int VOL_MAX = 63;
     private static final int VOL_STEP = 3;
 
@@ -56,18 +67,23 @@ public class MainActivity extends Activity {
 
     private ExoPlayer player;
     private PlayerView playerView;
-    private TextView liveBadge, statusMsg, infoTitle, infoBody, splashText;
-    private View infoOverlay, infoCard, splashLayer, splashImage, splashProgress, splashParticles;
+    private TextView liveBadge, infoTitle, infoBody, splashText, waitText;
+    private View infoOverlay, infoCard, splashLayer, splashProgress, splashParticles, waitLayer;
+    private ImageView splashImage, waitLogo;
     private ScrollView infoScroll;
     private VolumeRingView volumeRing;
-    private ObjectAnimator textPulse;
+    private ObjectAnimator textPulse, waitSpin, waitPulse;
 
     private String currentUrl;
     private boolean splashDone = false;
     private boolean splashRunning = false;
     private boolean infoVisible = false;
+    private boolean waitVisible = false;
     private int volLevel = VOL_MAX;
     private boolean muted = false;
+
+    private volatile boolean fetching = false;
+    private String failedSplashUrl = null;
 
     private final Runnable pollTask = new Runnable() {
         @Override
@@ -76,6 +92,7 @@ public class MainActivity extends Activity {
             handler.postDelayed(this, POLL_MS);
         }
     };
+    private final Runnable showWaitTask = this::showWait;
     private final Runnable hideInfoTask = this::hideInfo;
     private final Runnable hideVolumeTask = () ->
             volumeRing.animate().alpha(0f).scaleX(0.9f).scaleY(0.9f).setDuration(350).start();
@@ -91,7 +108,6 @@ public class MainActivity extends Activity {
 
         playerView = findViewById(R.id.player_view);
         liveBadge = findViewById(R.id.live_badge);
-        statusMsg = findViewById(R.id.status_msg);
         infoOverlay = findViewById(R.id.info_overlay);
         infoCard = findViewById(R.id.info_card);
         infoTitle = findViewById(R.id.info_title);
@@ -102,6 +118,9 @@ public class MainActivity extends Activity {
         splashProgress = findViewById(R.id.splash_progress);
         splashParticles = findViewById(R.id.splash_particles);
         splashText = findViewById(R.id.splash_text);
+        waitLayer = findViewById(R.id.wait_layer);
+        waitLogo = findViewById(R.id.wait_logo);
+        waitText = findViewById(R.id.wait_text);
         volumeRing = findViewById(R.id.volume_ring);
 
         prefs = getSharedPreferences("cfg", MODE_PRIVATE);
@@ -109,6 +128,7 @@ public class MainActivity extends Activity {
         applyInfoTexts(
                 prefs.getString("info_title", DEFAULT_INFO_TITLE),
                 prefs.getString("info_body", DEFAULT_INFO_BODY));
+        loadCustomSplash();
         hideSystemUi();
     }
 
@@ -156,13 +176,21 @@ public class MainActivity extends Activity {
 
         player.addListener(new Player.Listener() {
             @Override
-            public void onPlaybackStateChanged(int playbackState) {
-                if (playbackState == Player.STATE_READY) hideStatus();
+            public void onPlaybackStateChanged(int state) {
+                if (state == Player.STATE_READY) {
+                    handler.removeCallbacks(showWaitTask);
+                    hideWait();
+                } else if (state == Player.STATE_BUFFERING) {
+                    // Kisa takilmalarda bekleme ekrani cikmaz, 4 sn'den uzun surerse cikar
+                    scheduleWait(4000);
+                } else {
+                    scheduleWait(1500);
+                }
             }
 
             @Override
             public void onPlayerError(PlaybackException error) {
-                if (splashDone) showStatus("Bağlantı yeniden deneniyor…");
+                scheduleWait(0);
                 handler.postDelayed(() -> {
                     if (player != null) {
                         player.setMediaItem(buildItem(currentUrl));
@@ -194,6 +222,7 @@ public class MainActivity extends Activity {
         if (textPulse != null) textPulse.cancel();
         splashProgress.animate().cancel();
         splashImage.animate().cancel();
+        hideWaitNow();
         if (player != null) {
             playerView.setPlayer(null);
             player.release();
@@ -207,7 +236,83 @@ public class MainActivity extends Activity {
         player.setVolume(v);
     }
 
+    // ------------------------------------------------------------------ Bekleme ekrani
+
+    private void scheduleWait(long delayMs) {
+        if (waitVisible) return;
+        handler.removeCallbacks(showWaitTask);
+        handler.postDelayed(showWaitTask, delayMs);
+    }
+
+    private void showWait() {
+        if (!splashDone || waitVisible || player == null) return;
+        if (player.getPlaybackState() == Player.STATE_READY && player.getPlayerError() == null) return;
+        waitVisible = true;
+
+        waitLayer.animate().cancel();
+        waitLayer.setAlpha(0f);
+        waitLayer.setVisibility(View.VISIBLE);
+        waitLayer.animate().alpha(1f).setDuration(350).start();
+
+        // Donen logo: 360 derece, on yuzde yavaslayip tekrar hizlanir
+        waitLogo.setCameraDistance(8000f * getResources().getDisplayMetrics().density);
+        if (waitSpin != null) waitSpin.cancel();
+        waitSpin = ObjectAnimator.ofFloat(waitLogo, View.ROTATION_Y, 0f, 360f);
+        waitSpin.setDuration(3200);
+        waitSpin.setRepeatCount(ValueAnimator.INFINITE);
+        waitSpin.setInterpolator(new AccelerateDecelerateInterpolator());
+        waitSpin.start();
+
+        if (waitPulse != null) waitPulse.cancel();
+        waitPulse = ObjectAnimator.ofFloat(waitText, View.ALPHA, 0.35f, 1f);
+        waitPulse.setDuration(900);
+        waitPulse.setRepeatCount(ValueAnimator.INFINITE);
+        waitPulse.setRepeatMode(ValueAnimator.REVERSE);
+        waitPulse.start();
+    }
+
+    private void hideWait() {
+        if (!waitVisible) return;
+        waitVisible = false;
+        waitLayer.animate().cancel();
+        waitLayer.animate().alpha(0f).setDuration(400).withEndAction(() -> {
+            if (!waitVisible) {
+                waitLayer.setVisibility(View.GONE);
+                if (waitSpin != null) waitSpin.cancel();
+                if (waitPulse != null) waitPulse.cancel();
+            }
+        }).start();
+    }
+
+    private void hideWaitNow() {
+        waitVisible = false;
+        waitLayer.animate().cancel();
+        waitLayer.setVisibility(View.GONE);
+        if (waitSpin != null) waitSpin.cancel();
+        if (waitPulse != null) waitPulse.cancel();
+    }
+
     // ------------------------------------------------------------------ Acilis
+
+    // Uzaktan indirilmis acilis gorseli varsa onu, yoksa uygulamanin kendi gorselini kullanir
+    private void loadCustomSplash() {
+        File f = new File(getFilesDir(), "acilis.img");
+        if (!f.exists()) return;
+        try {
+            BitmapFactory.Options o = new BitmapFactory.Options();
+            o.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(f.getPath(), o);
+            if (o.outWidth <= 0) return;
+            int sample = 1;
+            while (o.outWidth / sample > 2400) sample *= 2;
+            BitmapFactory.Options o2 = new BitmapFactory.Options();
+            o2.inSampleSize = sample;
+            Bitmap bmp = BitmapFactory.decodeFile(f.getPath(), o2);
+            if (bmp != null) splashImage.setImageBitmap(bmp);
+        } catch (Throwable ignored) {
+            // Bozuk dosya olursa varsayilan gorsel kalir
+        }
+    }
 
     private void runSplash() {
         if (splashRunning) return;
@@ -249,6 +354,8 @@ public class MainActivity extends Activity {
         if (player != null) {
             applyVolume();
             player.setPlayWhenReady(true);
+            // Yayin acilis bitince hala hazir degilse bekleme ekranini goster
+            if (player.getPlaybackState() != Player.STATE_READY) scheduleWait(1200);
         }
         splashLayer.animate().alpha(0f).setDuration(800).withEndAction(() -> {
             splashLayer.setVisibility(View.GONE);
@@ -264,17 +371,6 @@ public class MainActivity extends Activity {
         liveBadge.animate().setStartDelay(0).alpha(1f).setDuration(500).start();
         handler.removeCallbacks(hideLiveTask);
         handler.postDelayed(hideLiveTask, 6500);
-    }
-
-    // ------------------------------------------------------------------ Durum mesaji
-
-    private void showStatus(String msg) {
-        statusMsg.setText(msg);
-        statusMsg.setVisibility(View.VISIBLE);
-    }
-
-    private void hideStatus() {
-        statusMsg.setVisibility(View.GONE);
     }
 
     // ------------------------------------------------------------------ Bilgi ekrani
@@ -384,45 +480,120 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------------ Uzaktan ayar
 
     private void fetchRemote() {
-        if (CONFIG_URL.isEmpty()) return;
+        if (CONFIG_URL.isEmpty() || fetching) return;
+        fetching = true;
         new Thread(() -> {
-            String cfg = httpGet(CONFIG_URL);
-            if (cfg != null) {
-                String link = null;
-                for (String line : cfg.split("\n")) {
-                    line = line.replace("\uFEFF", "").trim();
-                    if (line.startsWith("http")) {
-                        link = line;
-                        break;
-                    }
-                }
-                final String newUrl = link;
-                if (newUrl != null) handler.post(() -> applyUrl(newUrl));
-            }
-
-            String info = httpGet(INFO_URL);
-            if (info != null) {
-                info = info.replace("\uFEFF", "").replace("\r", "").trim();
-                if (!info.isEmpty()) {
-                    String title;
-                    String body;
-                    int nl = info.indexOf('\n');
-                    if (nl < 0) {
-                        title = "Genel Bilgi";
-                        body = info;
-                    } else {
-                        title = info.substring(0, nl).trim();
-                        body = info.substring(nl + 1).trim();
-                    }
-                    final String t = title;
-                    final String b = body;
-                    handler.post(() -> {
-                        prefs.edit().putString("info_title", t).putString("info_body", b).apply();
-                        applyInfoTexts(t, b);
-                    });
-                }
+            try {
+                fetchRemoteBlocking();
+            } finally {
+                fetching = false;
             }
         }).start();
+    }
+
+    private void fetchRemoteBlocking() {
+        // 1) Yayin linki
+        String cfg = httpGet(CONFIG_URL);
+        if (cfg != null) {
+            String link = null;
+            for (String line : cfg.split("\n")) {
+                line = line.replace("\uFEFF", "").trim();
+                if (line.startsWith("http")) {
+                    link = line;
+                    break;
+                }
+            }
+            final String newUrl = link;
+            if (newUrl != null) handler.post(() -> applyUrl(newUrl));
+        }
+
+        // 2) Genel bilgi metni
+        String info = httpGet(INFO_URL);
+        if (info != null) {
+            info = info.replace("\uFEFF", "").replace("\r", "").trim();
+            if (!info.isEmpty()) {
+                String title;
+                String body;
+                int nl = info.indexOf('\n');
+                if (nl < 0) {
+                    title = "Genel Bilgi";
+                    body = info;
+                } else {
+                    title = info.substring(0, nl).trim();
+                    body = info.substring(nl + 1).trim();
+                }
+                final String t = title;
+                final String b = body;
+                handler.post(() -> {
+                    prefs.edit().putString("info_title", t).putString("info_body", b).apply();
+                    applyInfoTexts(t, b);
+                });
+            }
+        }
+
+        // 3) Acilis gorseli (bir sonraki acilista gorunur)
+        String sp = httpGet(SPLASH_CFG_URL);
+        if (sp != null) {
+            String first = null;
+            for (String line : sp.split("\n")) {
+                line = line.replace("\uFEFF", "").trim();
+                if (!line.isEmpty()) {
+                    first = line;
+                    break;
+                }
+            }
+            if (first != null) {
+                String saved = prefs.getString("splash_url", "");
+                if (first.equalsIgnoreCase("yok") || first.equalsIgnoreCase("varsayilan")) {
+                    if (!saved.isEmpty()) {
+                        new File(getFilesDir(), "acilis.img").delete();
+                        prefs.edit().remove("splash_url").apply();
+                    }
+                } else if (first.startsWith("http")
+                        && !first.equals(saved) && !first.equals(failedSplashUrl)) {
+                    if (downloadSplash(first)) {
+                        prefs.edit().putString("splash_url", first).apply();
+                    } else {
+                        failedSplashUrl = first;
+                    }
+                }
+            }
+        }
+    }
+
+    private boolean downloadSplash(String urlStr) {
+        HttpURLConnection c = null;
+        File tmp = new File(getFilesDir(), "acilis.tmp");
+        try {
+            c = (HttpURLConnection) new URL(urlStr).openConnection();
+            c.setConnectTimeout(10000);
+            c.setReadTimeout(20000);
+            if (c.getResponseCode() != 200) return false;
+            if (c.getContentLength() > MAX_IMG_BYTES) return false;
+            long total = 0;
+            try (InputStream in = c.getInputStream();
+                 FileOutputStream out = new FileOutputStream(tmp)) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    total += n;
+                    if (total > MAX_IMG_BYTES) return false;
+                    out.write(buf, 0, n);
+                }
+            }
+            BitmapFactory.Options o = new BitmapFactory.Options();
+            o.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(tmp.getPath(), o);
+            if (o.outWidth <= 0 || o.outHeight <= 0) return false;   // gecerli resim degil
+            File dst = new File(getFilesDir(), "acilis.img");
+            if (dst.exists()) dst.delete();
+            return tmp.renameTo(dst);
+        } catch (Exception ex) {
+            return false;
+        } finally {
+            if (c != null) c.disconnect();
+            if (tmp.exists()) tmp.delete();
+        }
     }
 
     private String httpGet(String urlStr) {
