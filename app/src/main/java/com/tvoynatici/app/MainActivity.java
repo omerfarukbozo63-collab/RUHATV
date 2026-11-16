@@ -1038,7 +1038,7 @@ public class MainActivity extends Activity {
     private int iconFor(String platform) {
         String p = platform.toLowerCase();
         if (p.contains("insta")) return R.drawable.ic_instagram;
-        if (p.equals("x") || p.contains("twitter")) return R.drawable.ic_x;
+        if (p.contains("x.com") || p.contains("twitter") || p.trim().equals("x")) return R.drawable.ic_x;
         if (p.contains("youtube")) return R.drawable.ic_youtube;
         if (p.contains("facebook")) return R.drawable.ic_facebook;
         return R.drawable.ic_heart;
@@ -1095,7 +1095,12 @@ public class MainActivity extends Activity {
             row.setOnClickListener(v -> openLink(url));
 
             ImageView ic = new ImageView(this);
-            ic.setImageResource(iconFor(items[i][2]));
+            String key = items[i][2] + " " + items[i][3];
+            if (key.toLowerCase().contains("insta")) {
+                ic.setImageDrawable(new InstagramDrawable());
+            } else {
+                ic.setImageResource(iconFor(key));
+            }
             row.addView(ic, new LinearLayout.LayoutParams((int) dp(40), (int) dp(40)));
 
             LinearLayout col = new LinearLayout(this);
