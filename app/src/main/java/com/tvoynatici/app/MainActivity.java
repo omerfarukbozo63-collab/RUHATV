@@ -111,18 +111,21 @@ public class MainActivity extends Activity {
 
     // Haber / YouTube akislari (sadece telefon)
     private static final String NEWS_RSS_URL = "https://www.urfahaber.com/rss.xml";
-    private static final String YT_CHANNEL_ID = "UCY1FEWagT0PqH0FLEwdHtlA";
-    private static final String YT_FEED_URL =
-            "https://www.youtube.com/feeds/videos.xml?channel_id=" + YT_CHANNEL_ID;
-    private static final String YT_CHANNEL_URL =
-            "https://www.youtube.com/channel/" + YT_CHANNEL_ID + "?sub_confirmation=1";
-    private static final String YT_USER = "Ruhatv1";
     private static final long FEED_POLL_MS = 5 * 60 * 1000;
     private static final long FEED_RETRY_MS = 60 * 1000;
     private long newsNext = 0;
-    private long videoNext = 0;
     private volatile int lastFeedCode = 0;
-    private android.animation.ObjectAnimator arrowNewsAnim, arrowVideoAnim;
+    private android.animation.ObjectAnimator arrowNewsAnim;
+    private java.util.List<FeedData.News> tickerNews = new java.util.ArrayList<>();
+    private int tickerIdx = 0;
+    private final Runnable tickerTask = new Runnable() {
+        @Override
+        public void run() {
+            tickerStep();
+            handler.postDelayed(this, TICKER_MS);
+        }
+    };
+    private static final long TICKER_MS = 6000;
     private FeedPanels panels;
     private float gDownX, gDownY;
     private boolean gTracking = false;
@@ -143,7 +146,7 @@ public class MainActivity extends Activity {
 
     // Sosyal medya paneli
     private View socialOverlay, socialBar;
-    private LinearLayout socialList;
+    private android.widget.GridLayout socialList;
     private boolean socialVisible = false;
     // Satir: {isim, kullanici adi, platform, link}. Uzaktan gelen liste bunun yerine gecer.
     private String[][] socialItems = {
@@ -705,7 +708,7 @@ public class MainActivity extends Activity {
             }
         }
 
-        // 5) Haber ve YouTube akislari (telefon): en sona, yavas olabilir
+        // 5) Haber akisi (telefon): en sona, yavas olabilir
         fetchFeedsBlocking();
     }
 
@@ -881,21 +884,14 @@ public class MainActivity extends Activity {
         glowOn = prefs.getBoolean("glow", true);
 
         // Haber (alttan) ve YouTube (sagdan) panelleri
-        panels = new FeedPanels(this, root, handler, YT_CHANNEL_URL, url -> openLink(url));
+        panels = new FeedPanels(this, root, handler, url -> openLink(url));
         volumeRing.bringToFront();
         String cachedNews = prefs.getString("news_raw", "");
-        if (!cachedNews.isEmpty()) panels.setNews(FeedData.parseNews(cachedNews));
-        String cachedVid = prefs.getString("yt_raw", "");
-        if (!cachedVid.isEmpty()) panels.setVideos(FeedData.parseVideos(cachedVid));
+        if (!cachedNews.isEmpty()) onNewsLoaded(FeedData.parseNews(cachedNews));
         findViewById(R.id.chip_news).setOnClickListener(v -> {
             hideControls();
-            refreshFeedsIfEmpty(true);
+            refreshFeedsIfEmpty();
             panels.showNews();
-        });
-        findViewById(R.id.chip_video).setOnClickListener(v -> {
-            hideControls();
-            refreshFeedsIfEmpty(false);
-            panels.showVideos();
         });
 
         aspectIndex = Math.max(0, Math.min(ASPECT_NAMES.length - 1, prefs.getInt("aspect", 0)));
@@ -1156,7 +1152,8 @@ public class MainActivity extends Activity {
 
     private void updateMuteIcon() {
         if (btnMute == null) return;
-        btnMute.setColorFilter(muted ? 0xFF1DE9D0 : 0xFFFFFFFF);
+        btnMute.setBackgroundResource(muted ? R.drawable.bg_dock_on : R.drawable.bg_dock_btn);
+        btnMute.setColorFilter(muted ? 0xFF03203A : 0xFFFFFFFF);
     }
 
     // ------------------------------------------------------------------ Sosyal medya
@@ -1209,16 +1206,27 @@ public class MainActivity extends Activity {
         String[][] items = socialItems;
         socialList.removeAllViews();
 
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        int cardW = Math.min(screenW - (int) dp(40), (int) dp(600));
+        View card = findViewById(R.id.social_card);
+        ViewGroup.LayoutParams clp0 = card.getLayoutParams();
+        clp0.width = cardW;
+        card.setLayoutParams(clp0);
+        int cols = cardW >= dp(520) ? 3 : 2;
+        socialList.setColumnCount(cols);
+        int gap = (int) dp(5);
+        int tileW = (cardW - (int) dp(40) - cols * 2 * gap) / cols;
+
         for (int i = 0; i < items.length; i++) {
             final String url = items[i][3];
 
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setBackgroundResource(R.drawable.bg_row);
-            row.setPadding((int) dp(12), (int) dp(10), (int) dp(14), (int) dp(10));
-            row.setClickable(true);
-            row.setOnClickListener(v -> openLink(url));
+            LinearLayout tile = new LinearLayout(this);
+            tile.setOrientation(LinearLayout.HORIZONTAL);
+            tile.setGravity(Gravity.CENTER_VERTICAL);
+            tile.setBackgroundResource(i == 0 ? R.drawable.bg_row_f : R.drawable.bg_row);
+            tile.setPadding((int) dp(10), (int) dp(10), (int) dp(8), (int) dp(10));
+            tile.setClickable(true);
+            tile.setOnClickListener(v -> openLink(url));
 
             ImageView ic = new ImageView(this);
             String key = items[i][2] + " " + items[i][3];
@@ -1227,38 +1235,49 @@ public class MainActivity extends Activity {
             } else {
                 ic.setImageResource(iconFor(key));
             }
-            row.addView(ic, new LinearLayout.LayoutParams((int) dp(40), (int) dp(40)));
+            tile.addView(ic, new LinearLayout.LayoutParams((int) dp(38), (int) dp(38)));
 
             LinearLayout col = new LinearLayout(this);
             col.setOrientation(LinearLayout.VERTICAL);
             LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0,
                     ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            clp.leftMargin = (int) dp(14);
+            clp.leftMargin = (int) dp(10);
 
             TextView name = new TextView(this);
             name.setText(items[i][0]);
             name.setTextColor(0xFFFFFFFF);
-            name.setTextSize(17);
+            name.setTextSize(14);
             name.setTypeface(null, android.graphics.Typeface.BOLD);
+            name.setSingleLine(true);
+            name.setEllipsize(android.text.TextUtils.TruncateAt.END);
             col.addView(name);
 
             TextView sub = new TextView(this);
-            sub.setText(items[i][1] + "  ·  " + items[i][2]);
-            sub.setTextColor(0xB3FFFFFF);
-            sub.setTextSize(13);
+            sub.setText(items[i][1]);
+            sub.setTextColor(0xFF9DB4CA);
+            sub.setTextSize(11);
+            sub.setSingleLine(true);
+            sub.setEllipsize(android.text.TextUtils.TruncateAt.END);
             col.addView(sub);
-            row.addView(col, clp);
 
-            TextView arrow = new TextView(this);
-            arrow.setText("›");
-            arrow.setTextColor(0xFF1DE9D0);
-            arrow.setTextSize(28);
-            row.addView(arrow);
+            TextView plat = new TextView(this);
+            plat.setText(items[i][2].toUpperCase());
+            plat.setTextColor(0xFF1DE9D0);
+            plat.setTextSize(9);
+            plat.setLetterSpacing(0.08f);
+            plat.setTypeface(null, android.graphics.Typeface.BOLD);
+            plat.setSingleLine(true);
+            LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            plp.topMargin = (int) dp(3);
+            col.addView(plat, plp);
+            tile.addView(col, clp);
 
-            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            rlp.topMargin = (int) dp(10);
-            socialList.addView(row, rlp);
+            android.widget.GridLayout.LayoutParams glp = new android.widget.GridLayout.LayoutParams();
+            glp.width = tileW;
+            glp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+            glp.setMargins(gap, gap, gap, gap);
+            socialList.addView(tile, glp);
         }
     }
 
@@ -1341,12 +1360,8 @@ public class MainActivity extends Activity {
             int rh = root.getHeight();
             if (gDownY > rh * 0.55f && dy < -dp(70) && Math.abs(dy) > Math.abs(dx) * 1.5f) {
                 hideControls();
-                refreshFeedsIfEmpty(true);
+                refreshFeedsIfEmpty();
                 panels.showNews();
-            } else if (gDownX > rw * 0.6f && dx < -dp(70) && Math.abs(dx) > Math.abs(dy) * 1.5f) {
-                hideControls();
-                refreshFeedsIfEmpty(false);
-                panels.showVideos();
             }
         }
         if (act0 == MotionEvent.ACTION_DOWN) {
@@ -1424,44 +1439,13 @@ public class MainActivity extends Activity {
             if (!news.isEmpty()) {
                 newsNext = now + FEED_POLL_MS;
                 if (n.length() < 300000) prefs.edit().putString("news_raw", n).apply();
-                handler.post(() -> panels.setNews(news));
+                handler.post(() -> onNewsLoaded(news));
             } else {
                 newsNext = now + FEED_RETRY_MS;
                 final String msg = "Haberler alınamıyor (kod " + lastFeedCode + ")";
-                handler.post(() -> panels.setError(true, msg));
+                handler.post(() -> panels.setError(msg));
             }
         }
-
-        if (now >= videoNext) {
-            final java.util.List<FeedData.Video> vids = fetchVideosBlocking();
-            if (!vids.isEmpty()) {
-                videoNext = now + FEED_POLL_MS;
-                handler.post(() -> panels.setVideos(vids));
-            } else {
-                videoNext = now + FEED_RETRY_MS;
-                final String msg = "Videolar alınamıyor (kod " + lastFeedCode + ")";
-                handler.post(() -> panels.setError(false, msg));
-            }
-        }
-    }
-
-    // YouTube: once kanal kimligiyle, olmazsa kullanici adiyla, olmazsa kanal sayfasindan
-    private java.util.List<FeedData.Video> fetchVideosBlocking() {
-        String[] urls = {
-                "https://www.youtube.com/feeds/videos.xml?channel_id=" + YT_CHANNEL_ID,
-                "https://www.youtube.com/feeds/videos.xml?user=" + YT_USER
-        };
-        for (String u : urls) {
-            String x = httpGetFeed(u, 600000);
-            if (x == null) continue;
-            java.util.List<FeedData.Video> v = FeedData.parseVideos(x);
-            if (!v.isEmpty()) {
-                if (x.length() < 300000) prefs.edit().putString("yt_raw", x).apply();
-                return v;
-            }
-        }
-        String html = httpGetFeed("https://www.youtube.com/channel/" + YT_CHANNEL_ID + "/videos", 3000000);
-        return FeedData.parseVideosFromHtml(html);
     }
 
     // Akis/sayfa indirir. Tarayici gibi gorunur, onbellek engelleyici parametre eklemez.
@@ -1500,12 +1484,49 @@ public class MainActivity extends Activity {
     }
 
     // Panel acilirken liste bossa hemen yeniden dene
-    private void refreshFeedsIfEmpty(boolean news) {
+    private void refreshFeedsIfEmpty() {
         if (panels == null) return;
-        if (news ? panels.hasNews() : panels.hasVideos()) return;
-        if (news) newsNext = 0;
-        else videoNext = 0;
+        if (panels.hasNews()) return;
+        newsNext = 0;
         fetchRemote();
+    }
+
+    // Haberler geldi: panele ver, ust banttaki son haber basligini baslat
+    private void onNewsLoaded(java.util.List<FeedData.News> news) {
+        if (panels == null) return;
+        panels.setNews(news);
+        tickerNews = news == null ? new java.util.ArrayList<>() : news;
+        tickerIdx = 0;
+        handler.removeCallbacks(tickerTask);
+        if (!tickerNews.isEmpty()) {
+            TextView t = findViewById(R.id.ticker_title);
+            if (t != null) t.setText(tickerNews.get(0).title);
+            handler.postDelayed(tickerTask, TICKER_MS);
+            restartTickerProgress();
+        }
+    }
+
+    private void restartTickerProgress() {
+        View pr = findViewById(R.id.ticker_prog);
+        if (pr == null) return;
+        pr.animate().cancel();
+        pr.setPivotX(0f);
+        pr.setScaleX(0f);
+        pr.animate().scaleX(1f).setDuration(TICKER_MS).setInterpolator(new LinearInterpolator()).start();
+    }
+
+    private void tickerStep() {
+        if (tickerNews.size() < 2) return;
+        tickerIdx = (tickerIdx + 1) % tickerNews.size();
+        final TextView t = findViewById(R.id.ticker_title);
+        if (t == null) return;
+        final String next = tickerNews.get(tickerIdx).title;
+        t.animate().alpha(0f).translationY(-dp(6)).setDuration(180).withEndAction(() -> {
+            t.setText(next);
+            t.setTranslationY(dp(6));
+            t.animate().alpha(1f).translationY(0f).setDuration(220).start();
+        }).start();
+        restartTickerProgress();
     }
 
     // ------------------------------------------------------------------ Ok animasyonlari
@@ -1513,24 +1534,17 @@ public class MainActivity extends Activity {
     private void startArrows() {
         stopArrows();
         View an = findViewById(R.id.chip_news_arrow);
-        View av = findViewById(R.id.chip_video_arrow);
-        arrowNewsAnim = android.animation.ObjectAnimator.ofFloat(an, View.TRANSLATION_Y, 0f, -dp(4));
-        arrowVideoAnim = android.animation.ObjectAnimator.ofFloat(av, View.TRANSLATION_X, 0f, -dp(4));
-        for (android.animation.ObjectAnimator a : new android.animation.ObjectAnimator[]{arrowNewsAnim, arrowVideoAnim}) {
-            a.setDuration(620);
-            a.setRepeatCount(ValueAnimator.INFINITE);
-            a.setRepeatMode(ValueAnimator.REVERSE);
-            a.start();
-        }
+        arrowNewsAnim = android.animation.ObjectAnimator.ofFloat(an, View.TRANSLATION_Y, 0f, -dp(3));
+        arrowNewsAnim.setDuration(620);
+        arrowNewsAnim.setRepeatCount(ValueAnimator.INFINITE);
+        arrowNewsAnim.setRepeatMode(ValueAnimator.REVERSE);
+        arrowNewsAnim.start();
     }
 
     private void stopArrows() {
         if (arrowNewsAnim != null) arrowNewsAnim.cancel();
-        if (arrowVideoAnim != null) arrowVideoAnim.cancel();
         View an = findViewById(R.id.chip_news_arrow);
-        View av = findViewById(R.id.chip_video_arrow);
         if (an != null) an.setTranslationY(0f);
-        if (av != null) av.setTranslationX(0f);
     }
 
     // ------------------------------------------------------------------ Isikli cerceve

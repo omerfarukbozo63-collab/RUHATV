@@ -10,16 +10,14 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.animation.DecelerateInterpolator;
 import android.widget.FrameLayout;
-import android.widget.GridLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.util.List;
 
-/** Alttan cikan haber kartlari ve sagdan cikan YouTube video kareleri. */
+/** Alttan cikan Urfa Haber paneli: fotografli, kategori etiketli haber kartlari. */
 public class FeedPanels {
 
     public interface Host {
@@ -27,38 +25,31 @@ public class FeedPanels {
     }
 
     private static final long IDLE_MS = 30000;   // dokunulmazsa panel bu sure sonra kapanir
+    private static final String SITE_URL = "https://www.urfahaber.com";
 
     private final Activity act;
     private final Handler handler;
     private final Host host;
     private final float d;
-    private final int sideW;
     private final int heightDp;
 
     private final FrameLayout newsLayer;
-    private final FrameLayout videoLayer;
     private final LinearLayout newsSheet;
-    private final LinearLayout videoSide;
     private final LinearLayout newsRow;
-    private final GridLayout videoGrid;
     private final TextView newsStatus;
-    private final TextView videoStatus;
     private boolean newsOpen = false;
-    private boolean videoOpen = false;
     private final Runnable idleTask = this::hideAll;
 
-    public FeedPanels(Activity act, FrameLayout root, Handler handler, String channelUrl, Host host) {
+    public FeedPanels(Activity act, FrameLayout root, Handler handler, Host host) {
         this.act = act;
         this.handler = handler;
         this.host = host;
         DisplayMetrics dm = act.getResources().getDisplayMetrics();
         d = dm.density;
         heightDp = Math.round(dm.heightPixels / dm.density);
-        sideW = Math.min((int) (dm.widthPixels * 0.6f), dp(460));
 
-        // ------------------------------------------------------------ Haber paneli
         newsLayer = new FrameLayout(act);
-        newsLayer.setBackgroundColor(0x99000A1E);
+        newsLayer.setBackgroundColor(0x99020818);
         newsLayer.setClickable(true);
         newsLayer.setVisibility(View.GONE);
         newsLayer.setOnClickListener(v -> hideNews());
@@ -67,7 +58,7 @@ public class FeedPanels {
         newsSheet.setOrientation(LinearLayout.VERTICAL);
         newsSheet.setBackgroundResource(R.drawable.bg_sheet);
         newsSheet.setClickable(true);
-        newsSheet.setPadding(dp(16), dp(2), dp(16), dp(14));
+        newsSheet.setPadding(dp(18), dp(2), dp(18), dp(14));
         newsLayer.addView(newsSheet, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM));
@@ -75,35 +66,48 @@ public class FeedPanels {
         FrameLayout grip = new FrameLayout(act);
         View bar = new View(act);
         GradientDrawable gd = new GradientDrawable();
-        gd.setColor(0x66FFFFFF);
+        gd.setColor(0x59FFFFFF);
         gd.setCornerRadius(dp(3));
         bar.setBackground(gd);
         grip.addView(bar, new FrameLayout.LayoutParams(dp(44), dp(5), Gravity.CENTER));
         newsSheet.addView(grip, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(22)));
-        makeDismissable(grip, newsSheet, true);
+        makeDismissable(grip, newsSheet);
 
+        // Baslik: beyaz logo karosu, "Son Haberler", site adi, "Siteyi ac", kapat
         LinearLayout head = new LinearLayout(act);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
         FrameLayout plate = new FrameLayout(act);
         plate.setBackgroundResource(R.drawable.bg_logo_plate);
-        plate.setPadding(dp(10), dp(5), dp(10), dp(5));
+        plate.setPadding(dp(11), dp(6), dp(11), dp(6));
         ImageView urfaLogo = new ImageView(act);
         urfaLogo.setImageResource(R.drawable.logo_urfahaber);
         urfaLogo.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        plate.addView(urfaLogo, new FrameLayout.LayoutParams(dp(58), dp(27)));
+        plate.addView(urfaLogo, new FrameLayout.LayoutParams(dp(62), dp(28)));
         head.addView(plate, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         LinearLayout titles = new LinearLayout(act);
         titles.setOrientation(LinearLayout.VERTICAL);
-        titles.addView(text("Son Haberler", 20, 0xFF1DE9D0, true));
-        titles.addView(text("urfahaber.com", 12, 0xB3FFFFFF, false));
+        titles.addView(text("Son Haberler", 20, 0xFFFFFFFF, true));
+        titles.addView(text("urfahaber.com", 12, 0xFF1DE9D0, false));
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         tlp.leftMargin = dp(12);
         head.addView(titles, tlp);
-        head.addView(closeButton(() -> hideNews()), new LinearLayout.LayoutParams(dp(36), dp(36)));
+
+        TextView open = text("Siteyi aç  ↗", 12, 0xFFFFFFFF, true);
+        open.setGravity(Gravity.CENTER);
+        open.setBackgroundResource(R.drawable.bg_pill);
+        open.setPadding(dp(14), 0, dp(14), 0);
+        open.setClickable(true);
+        open.setOnClickListener(v -> host.openLink(SITE_URL));
+        LinearLayout.LayoutParams olp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(34));
+        olp.rightMargin = dp(10);
+        head.addView(open, olp);
+
+        head.addView(closeButton(() -> hideNews()), new LinearLayout.LayoutParams(dp(34), dp(34)));
         newsSheet.addView(head);
 
         newsStatus = text("Haberler yükleniyor…", 15, 0xB3FFFFFF, false);
@@ -115,77 +119,15 @@ public class FeedPanels {
         hs.setOverScrollMode(View.OVER_SCROLL_NEVER);
         newsRow = new LinearLayout(act);
         newsRow.setOrientation(LinearLayout.HORIZONTAL);
+        newsRow.setPadding(dp(4), dp(6), dp(4), dp(6));
         hs.addView(newsRow, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        hlp.topMargin = dp(10);
+        hlp.topMargin = dp(8);
         newsSheet.addView(hs, hlp);
 
         root.addView(newsLayer, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        // ------------------------------------------------------------ YouTube paneli
-        videoLayer = new FrameLayout(act);
-        videoLayer.setBackgroundColor(0x99000A1E);
-        videoLayer.setClickable(true);
-        videoLayer.setVisibility(View.GONE);
-        videoLayer.setOnClickListener(v -> hideVideos());
-
-        videoSide = new LinearLayout(act);
-        videoSide.setOrientation(LinearLayout.VERTICAL);
-        videoSide.setBackgroundResource(R.drawable.bg_side);
-        videoSide.setClickable(true);
-        videoSide.setPadding(dp(14), dp(12), dp(14), dp(12));
-        videoLayer.addView(videoSide, new FrameLayout.LayoutParams(
-                sideW, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END));
-
-        LinearLayout vhead = new LinearLayout(act);
-        vhead.setOrientation(LinearLayout.HORIZONTAL);
-        vhead.setGravity(Gravity.CENTER_VERTICAL);
-        ImageView badge = new ImageView(act);
-        badge.setImageResource(R.drawable.ic_yt_badge);
-        vhead.addView(badge, new LinearLayout.LayoutParams(dp(40), dp(28)));
-        LinearLayout vt = new LinearLayout(act);
-        vt.setOrientation(LinearLayout.VERTICAL);
-        vt.addView(text("Ruha TV", 20, 0xFFFFFFFF, true));
-        vt.addView(text("Son videolar", 12, 0xB3FFFFFF, false));
-        LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        vlp.leftMargin = dp(12);
-        vhead.addView(vt, vlp);
-        vhead.addView(closeButton(() -> hideVideos()), new LinearLayout.LayoutParams(dp(36), dp(36)));
-        videoSide.addView(vhead);
-        makeDismissable(vhead, videoSide, false);
-
-        videoStatus = text("Videolar yükleniyor…", 15, 0xB3FFFFFF, false);
-        videoStatus.setPadding(0, dp(18), 0, dp(10));
-        videoSide.addView(videoStatus);
-
-        ScrollView sv = new ScrollView(act);
-        sv.setVerticalScrollBarEnabled(false);
-        sv.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        videoGrid = new GridLayout(act);
-        videoGrid.setColumnCount(2);
-        sv.addView(videoGrid, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-        slp.topMargin = dp(8);
-        videoSide.addView(sv, slp);
-
-        TextView sub = text("YouTube'da abone ol  ›", 15, 0xFFFFFFFF, true);
-        sub.setGravity(Gravity.CENTER);
-        sub.setBackgroundResource(R.drawable.bg_yt);
-        sub.setPadding(dp(16), dp(11), dp(16), dp(11));
-        sub.setClickable(true);
-        sub.setOnClickListener(v -> host.openLink(channelUrl));
-        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        blp.topMargin = dp(10);
-        videoSide.addView(sub, blp);
-
-        root.addView(videoLayer, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
@@ -199,43 +141,21 @@ public class FeedPanels {
             return;
         }
         newsStatus.setVisibility(View.GONE);
-        int cardW = dp(230);
+        int cardW = dp(232);
+        int cardH = dp(Math.min(172, Math.max(120, (int) (heightDp * 0.42f))));
+        boolean first = true;
         for (FeedData.News n : list) {
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    cardW, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.rightMargin = dp(10);
-            newsRow.addView(newsCard(n, cardW), lp);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(cardW, cardH);
+            lp.rightMargin = dp(12);
+            newsRow.addView(newsCard(n, cardW, first), lp);
+            first = false;
         }
     }
 
-    public void setVideos(List<FeedData.Video> list) {
-        videoGrid.removeAllViews();
-        if (list == null || list.isEmpty()) {
-            videoStatus.setText("Videolar şu an alınamıyor");
-            videoStatus.setVisibility(View.VISIBLE);
-            return;
-        }
-        videoStatus.setVisibility(View.GONE);
-        int inner = sideW - dp(28);
-        int tileW = (inner - dp(16)) / 2;
-        for (FeedData.Video v : list) {
-            GridLayout.LayoutParams lp = new GridLayout.LayoutParams();
-            lp.width = tileW;
-            lp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
-            lp.setMargins(dp(4), dp(4), dp(4), dp(8));
-            videoGrid.addView(videoTile(v, tileW), lp);
-        }
-    }
-
-    public void setError(boolean news, String msg) {
-        if (news) {
-            if (newsRow.getChildCount() == 0) {
-                newsStatus.setText(msg);
-                newsStatus.setVisibility(View.VISIBLE);
-            }
-        } else if (videoGrid.getChildCount() == 0) {
-            videoStatus.setText(msg);
-            videoStatus.setVisibility(View.VISIBLE);
+    public void setError(String msg) {
+        if (newsRow.getChildCount() == 0) {
+            newsStatus.setText(msg);
+            newsStatus.setVisibility(View.VISIBLE);
         }
     }
 
@@ -243,86 +163,68 @@ public class FeedPanels {
         return newsRow.getChildCount() > 0;
     }
 
-    public boolean hasVideos() {
-        return videoGrid.getChildCount() > 0;
-    }
+    // ================================================================ Kart
 
-    // ================================================================ Kartlar
-
-    private View newsCard(final FeedData.News n, int cardW) {
-        LinearLayout card = new LinearLayout(act);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackgroundResource(R.drawable.bg_row);
+    private View newsCard(final FeedData.News n, int cardW, boolean featured) {
+        FrameLayout card = new FrameLayout(act);
+        GradientDrawable border = new GradientDrawable();
+        border.setCornerRadius(dp(18));
+        border.setColor(0xFF0B2244);
+        border.setStroke(featured ? dp(2) : dp(1), featured ? 0xFF1DE9D0 : 0x1FFFFFFF);
+        card.setBackground(border);
         card.setClipToOutline(true);
         card.setClickable(true);
         card.setOnClickListener(v -> host.openLink(n.link));
 
-        int imgH = Math.min(130, Math.max(80, (int) (heightDp * 0.26f)));
         ImageView img = new ImageView(act);
         img.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        img.setBackgroundColor(0xFF0B2244);
-        card.addView(img, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(imgH)));
+        card.addView(img, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         ImageLoader.load(img, n.image, cardW);
 
-        TextView title = text(n.title, 14, 0xFFFFFFFF, true);
+        // Alta dogru koyulasan perde: yazi her fotografta okunur
+        View shade = new View(act);
+        GradientDrawable sg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0x00000000, 0x00000000, 0xF0030A1A});
+        shade.setBackground(sg);
+        card.addView(shade, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        if (!n.category.isEmpty()) {
+            TextView cat = text(n.category.toUpperCase(), 9.5f, 0xFF1DE9D0, true);
+            cat.setLetterSpacing(0.08f);
+            cat.setBackgroundResource(R.drawable.bg_cat);
+            cat.setPadding(dp(9), dp(3), dp(9), dp(3));
+            FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP | Gravity.START);
+            clp.setMargins(dp(10), dp(10), 0, 0);
+            card.addView(cat, clp);
+        }
+
+        LinearLayout bottom = new LinearLayout(act);
+        bottom.setOrientation(LinearLayout.VERTICAL);
+        bottom.setPadding(dp(12), 0, dp(12), dp(10));
+        TextView title = text(n.title, 13.5f, 0xFFFFFFFF, true);
         title.setMaxLines(3);
         title.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        title.setPadding(dp(10), dp(8), dp(10), dp(4));
-        card.addView(title);
-
-        String meta = n.category.isEmpty() ? FeedData.timeAgo(n.time)
-                : n.category + "  ·  " + FeedData.timeAgo(n.time);
-        TextView m = text(meta, 11, 0xFF1DE9D0, false);
-        m.setPadding(dp(10), 0, dp(10), dp(10));
-        card.addView(m);
-        return card;
-    }
-
-    private View videoTile(final FeedData.Video v, int tileW) {
-        LinearLayout card = new LinearLayout(act);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackgroundResource(R.drawable.bg_row);
-        card.setClipToOutline(true);
-        card.setClickable(true);
-        card.setOnClickListener(x -> host.openLink(v.link));
-
-        FrameLayout box = new FrameLayout(act);
-        ImageView img = new ImageView(act);
-        img.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        img.setBackgroundColor(0xFF0B2244);
-        box.addView(img, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        TextView play = text("▶", 14, 0xFFFFFFFF, true);
-        play.setGravity(Gravity.CENTER);
-        play.setBackgroundResource(R.drawable.bg_circle);
-        box.addView(play, new FrameLayout.LayoutParams(dp(34), dp(34), Gravity.CENTER));
-        card.addView(box, new LinearLayout.LayoutParams(tileW, tileW * 9 / 16));
-        ImageLoader.load(img, v.thumb, tileW);
-
-        TextView title = text(v.title, 12, 0xFFFFFFFF, true);
-        title.setMaxLines(2);
-        title.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        title.setPadding(dp(8), dp(6), dp(8), dp(2));
-        card.addView(title);
-
-        String views = FeedData.viewsText(v.views);
-        String ago = FeedData.timeAgo(v.time);
-        String meta = views.isEmpty() ? ago : (ago.isEmpty() ? views : views + "  ·  " + ago);
-        TextView m = text(meta, 10, 0xB3FFFFFF, false);
-        m.setPadding(dp(8), 0, dp(8), dp(8));
-        card.addView(m);
+        bottom.addView(title);
+        TextView m = text("" + FeedData.timeAgo(n.time), 10.5f, 0xFF9DB4CA, false);
+        m.setPadding(0, dp(4), 0, 0);
+        bottom.addView(m);
+        card.addView(bottom, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM));
         return card;
     }
 
     // ================================================================ Acma / kapama
 
     public boolean isOpen() {
-        return newsOpen || videoOpen;
+        return newsOpen;
     }
 
     public void showNews() {
-        if (videoOpen) hideVideosNow();
         if (newsOpen) return;
         newsOpen = true;
         newsLayer.animate().cancel();
@@ -344,33 +246,10 @@ public class FeedPanels {
         touch();
     }
 
-    public void showVideos() {
-        if (newsOpen) hideNewsNow();
-        if (videoOpen) return;
-        videoOpen = true;
-        videoLayer.animate().cancel();
-        videoSide.animate().cancel();
-        videoLayer.setAlpha(0f);
-        videoLayer.setVisibility(View.VISIBLE);
-        videoSide.setTranslationX(sideW);
-        videoLayer.animate().alpha(1f).setDuration(180).start();
-        videoSide.animate().translationX(0f).setDuration(320)
-                .setInterpolator(new DecelerateInterpolator(1.6f)).start();
-        for (int i = 0; i < videoGrid.getChildCount(); i++) {
-            View c = videoGrid.getChildAt(i);
-            c.animate().cancel();
-            c.setAlpha(0f);
-            c.setTranslationY(dp(26));
-            c.animate().alpha(1f).translationY(0f)
-                    .setStartDelay(150L + 55L * i).setDuration(260).start();
-        }
-        touch();
-    }
-
     public void hideNews() {
         if (!newsOpen) return;
         newsOpen = false;
-        refreshIdle();
+        handler.removeCallbacks(idleTask);
         newsLayer.animate().alpha(0f).setDuration(220).withEndAction(() -> {
             if (!newsOpen) {
                 newsLayer.setVisibility(View.GONE);
@@ -380,44 +259,17 @@ public class FeedPanels {
         newsSheet.animate().translationY(dp(320)).setDuration(240).start();
     }
 
-    public void hideVideos() {
-        if (!videoOpen) return;
-        videoOpen = false;
-        refreshIdle();
-        videoLayer.animate().alpha(0f).setDuration(220).withEndAction(() -> {
-            if (!videoOpen) {
-                videoLayer.setVisibility(View.GONE);
-                videoSide.setTranslationX(0f);
-            }
-        }).start();
-        videoSide.animate().translationX(sideW).setDuration(240).start();
-    }
-
     public void hideAll() {
         hideNews();
-        hideVideos();
     }
 
-    private void hideNewsNow() {
+    /** Hicbir animasyon beklemeden her seyi kapatir. */
+    public void hideNow() {
         newsOpen = false;
         newsLayer.animate().cancel();
         newsSheet.animate().cancel();
         newsLayer.setVisibility(View.GONE);
         newsSheet.setTranslationY(0f);
-    }
-
-    private void hideVideosNow() {
-        videoOpen = false;
-        videoLayer.animate().cancel();
-        videoSide.animate().cancel();
-        videoLayer.setVisibility(View.GONE);
-        videoSide.setTranslationX(0f);
-    }
-
-    /** Hicbir animasyon beklemeden her seyi kapatir. */
-    public void hideNow() {
-        hideNewsNow();
-        hideVideosNow();
         handler.removeCallbacks(idleTask);
     }
 
@@ -427,26 +279,19 @@ public class FeedPanels {
         if (isOpen()) handler.postDelayed(idleTask, IDLE_MS);
     }
 
-    private void refreshIdle() {
-        handler.removeCallbacks(idleTask);
-        if (isOpen()) handler.postDelayed(idleTask, IDLE_MS);
-    }
-
     // ================================================================ Yardimcilar
 
-    private void makeDismissable(View grip, final View panel, final boolean vertical) {
+    private void makeDismissable(View grip, final View panel) {
         final float[] start = new float[1];
         grip.setOnTouchListener((v, e) -> {
-            float cur = vertical ? e.getRawY() : e.getRawX();
+            float cur = e.getRawY();
             int a = e.getActionMasked();
             if (a == MotionEvent.ACTION_DOWN) {
                 start[0] = cur;
                 return true;
             }
             if (a == MotionEvent.ACTION_MOVE) {
-                float dd = Math.max(0f, cur - start[0]);
-                if (vertical) panel.setTranslationY(dd);
-                else panel.setTranslationX(dd);
+                panel.setTranslationY(Math.max(0f, cur - start[0]));
                 return true;
             }
             if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
@@ -454,7 +299,7 @@ public class FeedPanels {
                 if (a == MotionEvent.ACTION_UP && dd > dp(60)) {
                     hideAll();
                 } else {
-                    panel.animate().translationX(0f).translationY(0f).setDuration(150).start();
+                    panel.animate().translationY(0f).setDuration(150).start();
                 }
                 return true;
             }
