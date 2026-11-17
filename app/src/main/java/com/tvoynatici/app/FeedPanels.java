@@ -86,11 +86,23 @@ public class FeedPanels {
         LinearLayout head = new LinearLayout(act);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
+        FrameLayout plate = new FrameLayout(act);
+        plate.setBackgroundResource(R.drawable.bg_logo_plate);
+        plate.setPadding(dp(10), dp(5), dp(10), dp(5));
+        ImageView urfaLogo = new ImageView(act);
+        urfaLogo.setImageResource(R.drawable.logo_urfahaber);
+        urfaLogo.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        plate.addView(urfaLogo, new FrameLayout.LayoutParams(dp(58), dp(27)));
+        head.addView(plate, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         LinearLayout titles = new LinearLayout(act);
         titles.setOrientation(LinearLayout.VERTICAL);
         titles.addView(text("Son Haberler", 20, 0xFF1DE9D0, true));
-        titles.addView(text("Urfa Haber", 13, 0xB3FFFFFF, false));
-        head.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        titles.addView(text("urfahaber.com", 12, 0xB3FFFFFF, false));
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tlp.leftMargin = dp(12);
+        head.addView(titles, tlp);
         head.addView(closeButton(() -> hideNews()), new LinearLayout.LayoutParams(dp(36), dp(36)));
         newsSheet.addView(head);
 
@@ -131,12 +143,17 @@ public class FeedPanels {
         LinearLayout vhead = new LinearLayout(act);
         vhead.setOrientation(LinearLayout.HORIZONTAL);
         vhead.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView badge = new ImageView(act);
+        badge.setImageResource(R.drawable.ic_yt_badge);
+        vhead.addView(badge, new LinearLayout.LayoutParams(dp(40), dp(28)));
         LinearLayout vt = new LinearLayout(act);
         vt.setOrientation(LinearLayout.VERTICAL);
-        TextView vtitle = text("▶  Ruha TV", 20, 0xFFFFFFFF, true);
-        vt.addView(vtitle);
-        vt.addView(text("YouTube'da son videolar", 13, 0xB3FFFFFF, false));
-        vhead.addView(vt, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        vt.addView(text("Ruha TV", 20, 0xFFFFFFFF, true));
+        vt.addView(text("Son videolar", 12, 0xB3FFFFFF, false));
+        LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        vlp.leftMargin = dp(12);
+        vhead.addView(vt, vlp);
         vhead.addView(closeButton(() -> hideVideos()), new LinearLayout.LayoutParams(dp(36), dp(36)));
         videoSide.addView(vhead);
         makeDismissable(vhead, videoSide, false);
@@ -210,16 +227,24 @@ public class FeedPanels {
         }
     }
 
-    public void setError(boolean news) {
+    public void setError(boolean news, String msg) {
         if (news) {
             if (newsRow.getChildCount() == 0) {
-                newsStatus.setText("Haberler şu an alınamıyor");
+                newsStatus.setText(msg);
                 newsStatus.setVisibility(View.VISIBLE);
             }
         } else if (videoGrid.getChildCount() == 0) {
-            videoStatus.setText("Videolar şu an alınamıyor");
+            videoStatus.setText(msg);
             videoStatus.setVisibility(View.VISIBLE);
         }
+    }
+
+    public boolean hasNews() {
+        return newsRow.getChildCount() > 0;
+    }
+
+    public boolean hasVideos() {
+        return videoGrid.getChildCount() > 0;
     }
 
     // ================================================================ Kartlar

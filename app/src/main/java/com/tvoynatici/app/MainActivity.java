@@ -113,9 +113,14 @@ public class MainActivity extends Activity {
             "https://www.youtube.com/feeds/videos.xml?channel_id=" + YT_CHANNEL_ID;
     private static final String YT_CHANNEL_URL =
             "https://www.youtube.com/channel/" + YT_CHANNEL_ID + "?sub_confirmation=1";
+    private static final String YT_USER = "Ruhatv1";
     private static final long FEED_POLL_MS = 5 * 60 * 1000;
+    private static final long FEED_RETRY_MS = 60 * 1000;
+    private long newsNext = 0;
+    private long videoNext = 0;
+    private volatile int lastFeedCode = 0;
+    private android.animation.ObjectAnimator arrowNewsAnim, arrowVideoAnim;
     private FeedPanels panels;
-    private long lastFeedFetch = 0;
     private float gDownX, gDownY;
     private boolean gTracking = false;
 
@@ -319,6 +324,7 @@ public class MainActivity extends Activity {
         socialVisible = false;
         socialOverlay.setVisibility(View.GONE);
         if (panels != null) panels.hideNow();
+        stopArrows();
         if (glowView != null) glowView.setVisibility(View.GONE);
         if (player != null) {
             playerView.setPlayer(null);
@@ -865,10 +871,12 @@ public class MainActivity extends Activity {
         if (!cachedVid.isEmpty()) panels.setVideos(FeedData.parseVideos(cachedVid));
         findViewById(R.id.chip_news).setOnClickListener(v -> {
             hideControls();
+            refreshFeedsIfEmpty(true);
             panels.showNews();
         });
         findViewById(R.id.chip_video).setOnClickListener(v -> {
             hideControls();
+            refreshFeedsIfEmpty(false);
             panels.showVideos();
         });
 
@@ -1006,6 +1014,7 @@ public class MainActivity extends Activity {
         touchControls.setAlpha(0f);
         touchControls.setVisibility(View.VISIBLE);
         touchControls.animate().alpha(1f).setDuration(200).start();
+        startArrows();
         scheduleHideControls();
     }
 
@@ -1015,7 +1024,10 @@ public class MainActivity extends Activity {
         aspectMenu.setVisibility(View.GONE);
         touchControls.animate().cancel();
         touchControls.animate().alpha(0f).setDuration(200).withEndAction(() -> {
-            if (!controlsVisible) touchControls.setVisibility(View.GONE);
+            if (!controlsVisible) {
+                touchControls.setVisibility(View.GONE);
+                stopArrows();
+            }
         }).start();
     }
 
@@ -1311,9 +1323,11 @@ public class MainActivity extends Activity {
             int rh = root.getHeight();
             if (gDownY > rh * 0.55f && dy < -dp(70) && Math.abs(dy) > Math.abs(dx) * 1.5f) {
                 hideControls();
+                refreshFeedsIfEmpty(true);
                 panels.showNews();
             } else if (gDownX > rw * 0.6f && dx < -dp(70) && Math.abs(dx) > Math.abs(dy) * 1.5f) {
                 hideControls();
+                refreshFeedsIfEmpty(false);
                 panels.showVideos();
             }
         }
@@ -1385,26 +1399,120 @@ public class MainActivity extends Activity {
     private void fetchFeedsBlocking() {
         if (isTv || panels == null) return;
         long now = System.currentTimeMillis();
-        if (now - lastFeedFetch < FEED_POLL_MS) return;
-        lastFeedFetch = now;
 
-        String n = httpGet(NEWS_RSS_URL, 600000);
-        final java.util.List<FeedData.News> news = FeedData.parseNews(n);
-        if (!news.isEmpty()) {
-            if (n.length() < 300000) prefs.edit().putString("news_raw", n).apply();
-            handler.post(() -> panels.setNews(news));
-        } else {
-            handler.post(() -> panels.setError(true));
+        if (now >= newsNext) {
+            String n = httpGetFeed(NEWS_RSS_URL, 600000);
+            final java.util.List<FeedData.News> news = FeedData.parseNews(n);
+            if (!news.isEmpty()) {
+                newsNext = now + FEED_POLL_MS;
+                if (n.length() < 300000) prefs.edit().putString("news_raw", n).apply();
+                handler.post(() -> panels.setNews(news));
+            } else {
+                newsNext = now + FEED_RETRY_MS;
+                final String msg = "Haberler alınamıyor (kod " + lastFeedCode + ")";
+                handler.post(() -> panels.setError(true, msg));
+            }
         }
 
-        String y = httpGet(YT_FEED_URL, 600000);
-        final java.util.List<FeedData.Video> vids = FeedData.parseVideos(y);
-        if (!vids.isEmpty()) {
-            if (y.length() < 300000) prefs.edit().putString("yt_raw", y).apply();
-            handler.post(() -> panels.setVideos(vids));
-        } else {
-            handler.post(() -> panels.setError(false));
+        if (now >= videoNext) {
+            final java.util.List<FeedData.Video> vids = fetchVideosBlocking();
+            if (!vids.isEmpty()) {
+                videoNext = now + FEED_POLL_MS;
+                handler.post(() -> panels.setVideos(vids));
+            } else {
+                videoNext = now + FEED_RETRY_MS;
+                final String msg = "Videolar alınamıyor (kod " + lastFeedCode + ")";
+                handler.post(() -> panels.setError(false, msg));
+            }
         }
+    }
+
+    // YouTube: once kanal kimligiyle, olmazsa kullanici adiyla, olmazsa kanal sayfasindan
+    private java.util.List<FeedData.Video> fetchVideosBlocking() {
+        String[] urls = {
+                "https://www.youtube.com/feeds/videos.xml?channel_id=" + YT_CHANNEL_ID,
+                "https://www.youtube.com/feeds/videos.xml?user=" + YT_USER
+        };
+        for (String u : urls) {
+            String x = httpGetFeed(u, 600000);
+            if (x == null) continue;
+            java.util.List<FeedData.Video> v = FeedData.parseVideos(x);
+            if (!v.isEmpty()) {
+                if (x.length() < 300000) prefs.edit().putString("yt_raw", x).apply();
+                return v;
+            }
+        }
+        String html = httpGetFeed("https://www.youtube.com/channel/" + YT_CHANNEL_ID + "/videos", 3000000);
+        return FeedData.parseVideosFromHtml(html);
+    }
+
+    // Akis/sayfa indirir. Tarayici gibi gorunur, onbellek engelleyici parametre eklemez.
+    private String httpGetFeed(String urlStr, int maxChars) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(urlStr).openConnection();
+            c.setConnectTimeout(10000);
+            c.setReadTimeout(15000);
+            c.setInstanceFollowRedirects(true);
+            c.setRequestProperty("User-Agent",
+                    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) "
+                            + "Chrome/124.0.0.0 Mobile Safari/537.36");
+            c.setRequestProperty("Accept",
+                    "application/atom+xml,application/rss+xml,application/xml,text/xml,text/html;q=0.9,*/*;q=0.8");
+            c.setRequestProperty("Accept-Language", "tr-TR,tr;q=0.9,en;q=0.8");
+            c.setRequestProperty("Cookie", "CONSENT=YES+1; SOCS=CAI");
+            int code = c.getResponseCode();
+            lastFeedCode = code;
+            if (code != 200) return null;
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader r = new BufferedReader(
+                    new InputStreamReader(c.getInputStream(), "UTF-8"))) {
+                String line;
+                while ((line = r.readLine()) != null && sb.length() < maxChars) {
+                    sb.append(line).append('\n');
+                }
+            }
+            return sb.toString();
+        } catch (Exception ex) {
+            lastFeedCode = -1;
+            return null;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    // Panel acilirken liste bossa hemen yeniden dene
+    private void refreshFeedsIfEmpty(boolean news) {
+        if (panels == null) return;
+        if (news ? panels.hasNews() : panels.hasVideos()) return;
+        if (news) newsNext = 0;
+        else videoNext = 0;
+        fetchRemote();
+    }
+
+    // ------------------------------------------------------------------ Ok animasyonlari
+
+    private void startArrows() {
+        stopArrows();
+        View an = findViewById(R.id.chip_news_arrow);
+        View av = findViewById(R.id.chip_video_arrow);
+        arrowNewsAnim = android.animation.ObjectAnimator.ofFloat(an, View.TRANSLATION_Y, 0f, -dp(4));
+        arrowVideoAnim = android.animation.ObjectAnimator.ofFloat(av, View.TRANSLATION_X, 0f, -dp(4));
+        for (android.animation.ObjectAnimator a : new android.animation.ObjectAnimator[]{arrowNewsAnim, arrowVideoAnim}) {
+            a.setDuration(620);
+            a.setRepeatCount(ValueAnimator.INFINITE);
+            a.setRepeatMode(ValueAnimator.REVERSE);
+            a.start();
+        }
+    }
+
+    private void stopArrows() {
+        if (arrowNewsAnim != null) arrowNewsAnim.cancel();
+        if (arrowVideoAnim != null) arrowVideoAnim.cancel();
+        View an = findViewById(R.id.chip_news_arrow);
+        View av = findViewById(R.id.chip_video_arrow);
+        if (an != null) an.setTranslationY(0f);
+        if (av != null) av.setTranslationX(0f);
     }
 
     // ------------------------------------------------------------------ Isikli cerceve

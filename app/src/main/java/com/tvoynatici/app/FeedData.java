@@ -10,7 +10,11 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Haber (RSS) ve YouTube (Atom) akislarini okur. */
 public class FeedData {
@@ -136,6 +140,41 @@ public class FeedData {
             // Bozuk ya da yarim kalmis akista elde olanlar gosterilir
         }
         return out;
+    }
+
+    // Son care: akis alinamazsa kanalin "Videolar" sayfasindan kimlik ve baslik okunur
+    public static List<Video> parseVideosFromHtml(String html) {
+        List<Video> out = new ArrayList<>();
+        if (html == null || html.isEmpty()) return out;
+        try {
+            Set<String> seen = new HashSet<>();
+            Matcher m = Pattern.compile("\"videoId\":\"([A-Za-z0-9_-]{11})\"").matcher(html);
+            Pattern titlePat = Pattern.compile(
+                    "\"title\":\\{\"runs\":\\[\\{\"text\":\"((?:[^\"\\\\]|\\\\.)*)\"");
+            while (m.find() && out.size() < 12) {
+                String id = m.group(1);
+                if (!seen.add(id)) continue;
+                int from = m.end();
+                int end = Math.min(html.length(), from + 3000);
+                Matcher t = titlePat.matcher(html.substring(from, end));
+                String title = t.find() ? unescape(t.group(1)) : "";
+                if (title.isEmpty()) continue;
+                Video v = new Video();
+                v.id = id;
+                v.title = title;
+                v.link = "https://www.youtube.com/watch?v=" + id;
+                v.thumb = "https://i.ytimg.com/vi/" + id + "/mqdefault.jpg";
+                out.add(v);
+            }
+        } catch (Throwable ignored) {
+            // Sayfa yapisi degismisse bos doner
+        }
+        return out;
+    }
+
+    private static String unescape(String s) {
+        return s.replace("\\u0026", "&").replace("\\\"", "\"").replace("\\/", "/")
+                .replace("\\\\", "\\").replace("\\n", " ").trim();
     }
 
     private static long parseRssDate(String s) {
