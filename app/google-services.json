@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "225247549419",
+    "project_id": "ruhatv-5e4cb",
+    "storage_bucket": "ruhatv-5e4cb.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:225247549419:android:f772537d569bb70e0c6bae",
+        "android_client_info": {
+          "package_name": "com.tvoynatici.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCT_XE3BLzTkBVimvKR-e5vN1ERdnOkAlU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

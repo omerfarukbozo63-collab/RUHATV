@@ -2,7 +2,10 @@ package com.tvoynatici.app;
 
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
+import android.Manifest;
 import android.app.Activity;
+import android.graphics.Color;
+import android.view.TextureView;
 import android.app.PictureInPictureParams;
 import android.content.Intent;
 import android.net.Uri;
@@ -101,6 +104,33 @@ public class MainActivity extends Activity {
     private boolean controlsVisible = false;
     private int aspectIndex = 0;
     private boolean inPip = false;
+    private String pendingLink = null;   // bildirimden gelen, acilistan sonra acilacak link
+
+    // Haber / YouTube akislari (sadece telefon)
+    private static final String NEWS_RSS_URL = "https://www.urfahaber.com/rss.xml";
+    private static final String YT_CHANNEL_ID = "UCY1FEWagT0PqH0FLEwdHtlA";
+    private static final String YT_FEED_URL =
+            "https://www.youtube.com/feeds/videos.xml?channel_id=" + YT_CHANNEL_ID;
+    private static final String YT_CHANNEL_URL =
+            "https://www.youtube.com/channel/" + YT_CHANNEL_ID + "?sub_confirmation=1";
+    private static final long FEED_POLL_MS = 5 * 60 * 1000;
+    private FeedPanels panels;
+    private long lastFeedFetch = 0;
+    private float gDownX, gDownY;
+    private boolean gTracking = false;
+
+    // Isikli cerceve
+    private GlowView glowView;
+    private TextView glowItem;
+    private boolean glowOn = true;
+    private Bitmap glowBmp;
+    private final Runnable glowTask = new Runnable() {
+        @Override
+        public void run() {
+            sampleGlow();
+            handler.postDelayed(this, 450);
+        }
+    };
     private ImageView btnMute;
 
     // Sosyal medya paneli
@@ -183,6 +213,8 @@ public class MainActivity extends Activity {
                 prefs.getString("info_body", DEFAULT_INFO_BODY));
         loadCustomSplash();
         setupPhoneControls();
+        setupNotifications();
+        readLinkFromIntent(getIntent());
         hideSystemUi();
     }
 
@@ -265,6 +297,7 @@ public class MainActivity extends Activity {
         player.prepare();
 
         handler.post(pollTask);
+        updateGlowState();
     }
 
     private MediaItem buildItem(String url) {
@@ -285,6 +318,8 @@ public class MainActivity extends Activity {
         touchControls.setVisibility(View.GONE);
         socialVisible = false;
         socialOverlay.setVisibility(View.GONE);
+        if (panels != null) panels.hideNow();
+        if (glowView != null) glowView.setVisibility(View.GONE);
         if (player != null) {
             playerView.setPlayer(null);
             player.release();
@@ -431,6 +466,7 @@ public class MainActivity extends Activity {
             splashParticles.setVisibility(View.GONE);
         }).start();
         showLiveBadge();
+        afterSplashNotifications();
     }
 
     private void showLiveBadge() {
@@ -539,6 +575,11 @@ public class MainActivity extends Activity {
             return true;
         }
 
+        if (panels != null && panels.isOpen() && down && code == KeyEvent.KEYCODE_BACK) {
+            panels.hideAll();
+            return true;
+        }
+
         if (socialVisible && down && code == KeyEvent.KEYCODE_BACK) {
             hideSocial();
             return true;
@@ -633,6 +674,9 @@ public class MainActivity extends Activity {
         // 4) Sosyal medya listesi
         fetchSocialBlocking();
 
+        // 5) Haber ve YouTube akislari (telefon)
+        fetchFeedsBlocking();
+
         // 3) Acilis gorseli (bir sonraki acilista gorunur)
         String sp = httpGet(SPLASH_CFG_URL);
         if (sp != null) {
@@ -713,6 +757,10 @@ public class MainActivity extends Activity {
     }
 
     private String httpGet(String urlStr) {
+        return httpGet(urlStr, 20000);
+    }
+
+    private String httpGet(String urlStr, int maxChars) {
         HttpURLConnection c = null;
         try {
             String u = urlStr + (urlStr.contains("?") ? "&" : "?") + "t=" + System.currentTimeMillis();
@@ -726,7 +774,7 @@ public class MainActivity extends Activity {
             try (BufferedReader r = new BufferedReader(
                     new InputStreamReader(c.getInputStream(), "UTF-8"))) {
                 String line;
-                while ((line = r.readLine()) != null && sb.length() < 20000) {
+                while ((line = r.readLine()) != null && sb.length() < maxChars) {
                     sb.append(line).append('\n');
                 }
             }
@@ -796,6 +844,34 @@ public class MainActivity extends Activity {
 
         if (isTv) return;   // Asagidakiler sadece telefon/tablet icin
 
+        // Telefonda yayin dokulu (TextureView) yuzeyde acilir: renkleri isik olarak yansitabilmek icin
+        int pidx = root.indexOfChild(playerView);
+        root.removeView(playerView);
+        PlayerView pv = (PlayerView) getLayoutInflater().inflate(R.layout.player_phone, root, false);
+        root.addView(pv, Math.max(0, pidx));
+        playerView = pv;
+
+        glowView = new GlowView(this);
+        root.addView(glowView, 0, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        glowOn = prefs.getBoolean("glow", true);
+
+        // Haber (alttan) ve YouTube (sagdan) panelleri
+        panels = new FeedPanels(this, root, handler, YT_CHANNEL_URL, url -> openLink(url));
+        volumeRing.bringToFront();
+        String cachedNews = prefs.getString("news_raw", "");
+        if (!cachedNews.isEmpty()) panels.setNews(FeedData.parseNews(cachedNews));
+        String cachedVid = prefs.getString("yt_raw", "");
+        if (!cachedVid.isEmpty()) panels.setVideos(FeedData.parseVideos(cachedVid));
+        findViewById(R.id.chip_news).setOnClickListener(v -> {
+            hideControls();
+            panels.showNews();
+        });
+        findViewById(R.id.chip_video).setOnClickListener(v -> {
+            hideControls();
+            panels.showVideos();
+        });
+
         aspectIndex = Math.max(0, Math.min(ASPECT_NAMES.length - 1, prefs.getInt("aspect", 0)));
         aspectChip.setText(ASPECT_NAMES[aspectIndex] + " ▾");
 
@@ -816,6 +892,24 @@ public class MainActivity extends Activity {
             });
             aspectMenu.addView(item, new GridLayout.LayoutParams());
         }
+
+        glowItem = new TextView(this);
+        glowItem.setTextSize(15);
+        glowItem.setGravity(Gravity.CENTER);
+        glowItem.setPadding((int) dp(14), (int) dp(9), (int) dp(14), (int) dp(9));
+        glowItem.setClickable(true);
+        glowItem.setOnClickListener(v -> {
+            glowOn = !glowOn;
+            prefs.edit().putBoolean("glow", glowOn).apply();
+            updateGlowItem();
+            updateGlowState();
+            scheduleHideControls();
+        });
+        GridLayout.LayoutParams glp = new GridLayout.LayoutParams(
+                GridLayout.spec(GridLayout.UNDEFINED), GridLayout.spec(0, 2));
+        glp.setGravity(Gravity.FILL_HORIZONTAL);
+        aspectMenu.addView(glowItem, glp);
+        updateGlowItem();
         refreshAspectMenu();
 
         aspectChip.setOnClickListener(v -> {
@@ -976,10 +1070,11 @@ public class MainActivity extends Activity {
         }
         playerView.setLayoutParams(lp);
         refreshAspectMenu();
+        updateGlowState();
     }
 
     private void refreshAspectMenu() {
-        for (int i = 0; i < aspectMenu.getChildCount(); i++) {
+        for (int i = 0; i < ASPECT_NAMES.length && i < aspectMenu.getChildCount(); i++) {
             TextView t = (TextView) aspectMenu.getChildAt(i);
             t.setTextColor(i == aspectIndex ? 0xFF1DE9D0 : 0xFFFFFFFF);
             t.setTypeface(null, i == aspectIndex ? android.graphics.Typeface.BOLD
@@ -1020,6 +1115,7 @@ public class MainActivity extends Activity {
             infoVisible = false;
             infoOverlay.setVisibility(View.GONE);
             hideSocialNow();
+            if (panels != null) panels.hideNow();
             volumeRing.setAlpha(0f);
             liveBadge.setVisibility(View.GONE);
         }
@@ -1138,6 +1234,7 @@ public class MainActivity extends Activity {
 
     private void openLink(String url) {
         hideSocial();
+        if (panels != null) panels.hideNow();
         try {
             startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
         } catch (Exception ignored) {
@@ -1197,7 +1294,30 @@ public class MainActivity extends Activity {
     // Panel acikken ya da menu acikken dokunus olursa kapanma suresi yeniden baslar
     @Override
     public boolean dispatchTouchEvent(MotionEvent ev) {
-        if (ev.getActionMasked() == MotionEvent.ACTION_DOWN) {
+        int act0 = ev.getActionMasked();
+        if (act0 == MotionEvent.ACTION_DOWN) {
+            if (panels != null && panels.isOpen()) panels.touch();
+            gTracking = !isTv && !inPip && splashDone && panels != null && !panels.isOpen()
+                    && !infoVisible && !socialVisible && volumeRing.getAlpha() < 0.5f;
+            gDownX = ev.getRawX();
+            gDownY = ev.getRawY();
+        } else if (act0 == MotionEvent.ACTION_CANCEL) {
+            gTracking = false;
+        } else if (act0 == MotionEvent.ACTION_UP && gTracking) {
+            gTracking = false;
+            float dx = ev.getRawX() - gDownX;
+            float dy = ev.getRawY() - gDownY;
+            int rw = root.getWidth();
+            int rh = root.getHeight();
+            if (gDownY > rh * 0.55f && dy < -dp(70) && Math.abs(dy) > Math.abs(dx) * 1.5f) {
+                hideControls();
+                panels.showNews();
+            } else if (gDownX > rw * 0.6f && dx < -dp(70) && Math.abs(dx) > Math.abs(dy) * 1.5f) {
+                hideControls();
+                panels.showVideos();
+            }
+        }
+        if (act0 == MotionEvent.ACTION_DOWN) {
             if (socialVisible) restartSocialTimer();
             if (infoVisible && !isTv) {
                 handler.removeCallbacks(hideInfoTask);
@@ -1206,6 +1326,152 @@ public class MainActivity extends Activity {
             if (controlsVisible) scheduleHideControls();
         }
         return super.dispatchTouchEvent(ev);
+    }
+
+    // ------------------------------------------------------------------ Bildirimler (Firebase)
+
+    private void setupNotifications() {
+        if (isTv) return;   // TV'de bildirim yok
+        try {
+            RuhaMessagingService.ensureChannel(this);
+            com.google.firebase.messaging.FirebaseMessaging.getInstance().subscribeToTopic("herkes");
+        } catch (Throwable ignored) {
+            // Firebase hazir degilse uygulama yine normal calisir
+        }
+    }
+
+    private void afterSplashNotifications() {
+        if (isTv) return;
+        // Android 13+: bildirim izni iste (bir kez)
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+                && !prefs.getBoolean("notif_asked", false)) {
+            prefs.edit().putBoolean("notif_asked", true).apply();
+            try {
+                requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101);
+            } catch (Throwable ignored) {
+                // Izin penceresi acilamazsa devam
+            }
+        }
+        // Bildirime dokunarak gelindiyse ve bildirimde link varsa ac
+        if (pendingLink != null) {
+            String l = pendingLink;
+            pendingLink = null;
+            openLink(l);
+        }
+    }
+
+    private void readLinkFromIntent(Intent i) {
+        if (i == null) return;
+        String l = i.getStringExtra("link");
+        if (l != null && (l.startsWith("http://") || l.startsWith("https://"))) pendingLink = l;
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        readLinkFromIntent(intent);
+        if (splashDone && pendingLink != null) {
+            String l = pendingLink;
+            pendingLink = null;
+            openLink(l);
+        }
+    }
+
+    // ------------------------------------------------------------------ Haber / YouTube akislari
+
+    private void fetchFeedsBlocking() {
+        if (isTv || panels == null) return;
+        long now = System.currentTimeMillis();
+        if (now - lastFeedFetch < FEED_POLL_MS) return;
+        lastFeedFetch = now;
+
+        String n = httpGet(NEWS_RSS_URL, 600000);
+        final java.util.List<FeedData.News> news = FeedData.parseNews(n);
+        if (!news.isEmpty()) {
+            if (n.length() < 300000) prefs.edit().putString("news_raw", n).apply();
+            handler.post(() -> panels.setNews(news));
+        } else {
+            handler.post(() -> panels.setError(true));
+        }
+
+        String y = httpGet(YT_FEED_URL, 600000);
+        final java.util.List<FeedData.Video> vids = FeedData.parseVideos(y);
+        if (!vids.isEmpty()) {
+            if (y.length() < 300000) prefs.edit().putString("yt_raw", y).apply();
+            handler.post(() -> panels.setVideos(vids));
+        } else {
+            handler.post(() -> panels.setError(false));
+        }
+    }
+
+    // ------------------------------------------------------------------ Isikli cerceve
+
+    private void updateGlowItem() {
+        if (glowItem == null) return;
+        glowItem.setText("Işıklı çerçeve: " + (glowOn ? "Açık" : "Kapalı"));
+        glowItem.setTextColor(glowOn ? 0xFF1DE9D0 : 0xFFFFFFFF);
+    }
+
+    // Isik sadece yayin cercevesinin disinda bosluk varken ve mini oynatici disinda calisir
+    private void updateGlowState() {
+        if (glowView == null) return;
+        handler.removeCallbacks(glowTask);
+        boolean active = glowOn && !isTv && !inPip && aspectIndex != 1 && aspectIndex != 2
+                && player != null;
+        glowView.setVisibility(active ? View.VISIBLE : View.GONE);
+        if (active) handler.post(glowTask);
+    }
+
+    private void sampleGlow() {
+        if (player == null || glowView == null) return;
+        if (player.getPlaybackState() != Player.STATE_READY) return;
+        View sv = playerView.getVideoSurfaceView();
+        if (!(sv instanceof TextureView)) return;
+        TextureView tv = (TextureView) sv;
+        if (!tv.isAvailable()) return;
+        final int w = 24;
+        final int h = 14;
+        try {
+            if (glowBmp == null) glowBmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            tv.getBitmap(glowBmp);
+            int l = avg(0, 3, 0, h);
+            int r = avg(w - 3, w, 0, h);
+            int t = avg(0, w, 0, 2);
+            int b = avg(0, w, h - 2, h);
+            glowView.setTargets(tint(l), tint(r), tint(t), tint(b));
+        } catch (Throwable ignored) {
+            // Ornekleme basarisiz olursa mevcut renkler kalir
+        }
+    }
+
+    private int avg(int x0, int x1, int y0, int y1) {
+        long rr = 0;
+        long gg = 0;
+        long bb = 0;
+        int n = 0;
+        for (int x = x0; x < x1; x++) {
+            for (int y = y0; y < y1; y++) {
+                int p = glowBmp.getPixel(x, y);
+                rr += Color.red(p);
+                gg += Color.green(p);
+                bb += Color.blue(p);
+                n++;
+            }
+        }
+        if (n == 0) return 0xFF0A2A5A;
+        return Color.rgb((int) (rr / n), (int) (gg / n), (int) (bb / n));
+    }
+
+    // Rengi biraz canlandirir, cok karanlik olursa koyu laciverte yaklastirir
+    private int tint(int c) {
+        float[] hsv = new float[3];
+        Color.colorToHSV(c, hsv);
+        hsv[1] = Math.min(1f, hsv[1] * 1.3f);
+        hsv[2] = Math.min(1f, Math.max(hsv[2] * 1.25f, 0.14f));
+        return Color.HSVToColor(hsv);
     }
 
     // ------------------------------------------------------------------ Yardimcilar
