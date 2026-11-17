@@ -90,48 +90,6 @@
         android:visibility="gone">
 
         <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="top|start"
-            android:layout_margin="14dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <ImageView
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:adjustViewBounds="true"
-                android:contentDescription="Ruha TV"
-                android:src="@drawable/logo_tr" />
-
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="26dp"
-                android:layout_marginLeft="10dp"
-                android:background="@drawable/bg_glass"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:paddingLeft="9dp"
-                android:paddingRight="11dp">
-
-                <View
-                    android:layout_width="8dp"
-                    android:layout_height="8dp"
-                    android:background="@drawable/bg_live_dot" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginLeft="7dp"
-                    android:letterSpacing="0.12"
-                    android:text="CANLI"
-                    android:textColor="#FFFFFF"
-                    android:textSize="11sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-        </LinearLayout>
-
-        <LinearLayout
             android:id="@+id/dock"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

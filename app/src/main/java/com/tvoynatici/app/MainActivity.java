@@ -482,6 +482,7 @@ public class MainActivity extends Activity {
     }
 
     private void showLiveBadge() {
+        if (true) return;   // CANLI rozeti kaldirildi
         liveBadge.animate().cancel();
         liveBadge.setVisibility(View.VISIBLE);
         liveBadge.setAlpha(0f);
