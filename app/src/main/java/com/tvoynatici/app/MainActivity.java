@@ -60,7 +60,10 @@ public class MainActivity extends Activity {
             "https://gist.githubusercontent.com/omerfarukbozo63-collab/3f0ffd3629d37767b6034f27ae461631/raw/yayin.txt";
 
     // Acilis gorselinin linki: yayin.txt ile ayni Gist'teki "acilis.txt" dosyasi
-    private static final String SPLASH_CFG_URL = CONFIG_URL.replace("yayin.txt", "acilis.txt");
+    private static final String SPLASH_CFG_URL =
+            "https://gist.githubusercontent.com/omerfarukbozo63-collab/64186f8ebb19000f9a0d245fe10ac317/raw/acilis.txt";
+    // Eski konum (yayin.txt ile ayni Gist): ilki bos ya da ulasilamazsa buraya bakilir
+    private static final String SPLASH_CFG_URL_OLD = CONFIG_URL.replace("yayin.txt", "acilis.txt");
 
     // Sosyal medya listesi: yayin.txt ile ayni Gist'teki "sosyal.txt" dosyasi
     private static final String SOCIAL_CFG_URL = CONFIG_URL.replace("yayin.txt", "sosyal.txt");
@@ -680,37 +683,50 @@ public class MainActivity extends Activity {
         // 4) Sosyal medya listesi
         fetchSocialBlocking();
 
-        // 5) Haber ve YouTube akislari (telefon)
-        fetchFeedsBlocking();
-
         // 3) Acilis gorseli (bir sonraki acilista gorunur)
-        String sp = httpGet(SPLASH_CFG_URL);
-        if (sp != null) {
-            String first = null;
-            for (String line : sp.split("\n")) {
-                line = line.replace("\uFEFF", "").trim();
-                if (!line.isEmpty()) {
-                    first = line;
-                    break;
+        String first = firstLine(httpGet(SPLASH_CFG_URL));
+        if (first == null) first = firstLine(httpGet(SPLASH_CFG_URL_OLD));
+        if (first != null) {
+            String saved = prefs.getString("splash_url", "");
+            if (first.equalsIgnoreCase("yok") || first.equalsIgnoreCase("varsayilan")) {
+                if (!saved.isEmpty()) {
+                    new File(getFilesDir(), "acilis.img").delete();
+                    prefs.edit().remove("splash_url").apply();
                 }
-            }
-            if (first != null) {
-                String saved = prefs.getString("splash_url", "");
-                if (first.equalsIgnoreCase("yok") || first.equalsIgnoreCase("varsayilan")) {
-                    if (!saved.isEmpty()) {
-                        new File(getFilesDir(), "acilis.img").delete();
-                        prefs.edit().remove("splash_url").apply();
-                    }
-                } else if (first.startsWith("http")
-                        && !first.equals(saved) && !first.equals(failedSplashUrl)) {
-                    if (downloadSplash(first)) {
-                        prefs.edit().putString("splash_url", first).apply();
+            } else if (first.startsWith("http")) {
+                String img = normalizeImageUrl(first);
+                if (!img.equals(saved) && !img.equals(failedSplashUrl)) {
+                    if (downloadSplash(img)) {
+                        prefs.edit().putString("splash_url", img).apply();
                     } else {
-                        failedSplashUrl = first;
+                        failedSplashUrl = img;
                     }
                 }
             }
         }
+
+        // 5) Haber ve YouTube akislari (telefon): en sona, yavas olabilir
+        fetchFeedsBlocking();
+    }
+
+    private String firstLine(String text) {
+        if (text == null) return null;
+        for (String line : text.split("\n")) {
+            line = line.replace("\uFEFF", "").trim();
+            if (!line.isEmpty()) return line;
+        }
+        return null;
+    }
+
+    // GitHub "blob" sayfa linkini dogrudan resim linkine cevirir
+    private String normalizeImageUrl(String u) {
+        if (u.startsWith("https://github.com/") && u.contains("/blob/")) {
+            u = u.replace("https://github.com/", "https://raw.githubusercontent.com/")
+                    .replace("/blob/", "/");
+            int q = u.indexOf('?');
+            if (q > 0) u = u.substring(0, q);
+        }
+        return u;
     }
 
     private void fetchSocialBlocking() {
@@ -734,6 +750,8 @@ public class MainActivity extends Activity {
             c = (HttpURLConnection) new URL(urlStr).openConnection();
             c.setConnectTimeout(10000);
             c.setReadTimeout(20000);
+            c.setInstanceFollowRedirects(true);
+            c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) RuhaTV/1.0");
             if (c.getResponseCode() != 200) return false;
             if (c.getContentLength() > MAX_IMG_BYTES) return false;
             long total = 0;
