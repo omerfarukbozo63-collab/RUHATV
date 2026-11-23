@@ -55,22 +55,14 @@ import java.net.URL;
 
 public class MainActivity extends Activity {
 
-    // Uzak ayar dosyasi: icinde sadece yayin linki yazar (Gist "yayin.txt")
-    private static final String CONFIG_URL =
-            "https://gist.githubusercontent.com/omerfarukbozo63-collab/3f0ffd3629d37767b6034f27ae461631/raw/yayin.txt";
-
-    // Acilis gorselinin linki: yayin.txt ile ayni Gist'teki "acilis.txt" dosyasi
-    private static final String SPLASH_CFG_URL =
-            "https://gist.githubusercontent.com/omerfarukbozo63-collab/64186f8ebb19000f9a0d245fe10ac317/raw/acilis.txt";
-    // Eski konum (yayin.txt ile ayni Gist): ilki bos ya da ulasilamazsa buraya bakilir
-    private static final String SPLASH_CFG_URL_OLD = CONFIG_URL.replace("yayin.txt", "acilis.txt");
-
-    // Sosyal medya listesi: yayin.txt ile ayni Gist'teki "sosyal.txt" dosyasi
-    private static final String SOCIAL_CFG_URL = CONFIG_URL.replace("yayin.txt", "sosyal.txt");
-
-    // Genel bilgi ekrani metni: "bilgi.txt" dosyasi (ayri Gist)
-    private static final String INFO_URL =
-            "https://gist.githubusercontent.com/omerfarukbozo63-collab/6a42452f27938d3837147c39ebe42e9d/raw/bilgi.txt";
+    // Uzak ayar dosyalari (ruhatv.com.tr)
+    private static final String BASE = "https://ruhatv.com.tr/";
+    private static final String CONFIG_URL = BASE + "yayin.txt";          // Ruha TV yayin linki
+    private static final String RADIO_CFG_URL = BASE + "radyoruha.txt";       // Radyo Ruha yayin linki
+    private static final String RADIO_LOGO_CFG_URL = BASE + "radyoruhalogo.txt";   // radyo logosunun linki
+    private static final String SPLASH_CFG_URL = BASE + "acilis.txt";     // acilis gorseli linki
+    private static final String SOCIAL_CFG_URL = BASE + "sosyal.txt";     // sosyal medya listesi
+    private static final String INFO_URL = BASE + "bilgi.txt";            // genel bilgi metni
 
     // Ayar dosyasina ulasilamazsa kullanilacak yedek yayin linki
     private static final String DEFAULT_URL =
@@ -168,6 +160,14 @@ public class MainActivity extends Activity {
 
     private String currentUrl;
     private boolean splashDone = false;
+    private int profile = -1;                 // -1: secilmedi, 0: Ruha TV, 1: Radyo Ruha
+    private boolean pickerShowing = false;
+    private boolean notifAsked = false;
+    private ProfilePicker picker;
+    private RadioView radioView;
+    private static java.lang.ref.WeakReference<MainActivity> sInstance;
+    private boolean radioBackground = false;     // radyo arka planda caliyor
+    private boolean radioStoppedByUser = false;  // bildirimden durduruldu
     private boolean splashRunning = false;
     private boolean infoVisible = false;
     private boolean waitVisible = false;
@@ -199,6 +199,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         setContentView(R.layout.activity_main);
+        sInstance = new java.lang.ref.WeakReference<>(this);
 
         playerView = findViewById(R.id.player_view);
         liveBadge = findViewById(R.id.live_badge);
@@ -224,6 +225,7 @@ public class MainActivity extends Activity {
                 prefs.getString("info_body", DEFAULT_INFO_BODY));
         loadCustomSplash();
         setupPhoneControls();
+        setupProfiles();
         setupNotifications();
         readLinkFromIntent(getIntent());
         hideSystemUi();
@@ -233,10 +235,23 @@ public class MainActivity extends Activity {
     protected void onStart() {
         super.onStart();
         inPip = Build.VERSION.SDK_INT >= 26 && isInPictureInPictureMode();
+        if (radioBackground) {
+            radioBackground = false;
+            stopService(new Intent(this, RadioService.class));
+        }
+        if (radioStoppedByUser) {
+            // Bildirimden "Durdur"a basilmisti: profil secimine don
+            radioStoppedByUser = false;
+            profile = -1;
+            splashDone = false;
+            pickerShowing = true;
+            radioView.setVisibility(View.GONE);
+            picker.show();
+        }
         startPlayer();
         if (splashDone) {
             splashLayer.setVisibility(View.GONE);
-        } else {
+        } else if (!pickerShowing) {
             runSplash();
         }
     }
@@ -247,7 +262,42 @@ public class MainActivity extends Activity {
         // Mini oynatici acikken yayin kesilmez
         if (Build.VERSION.SDK_INT >= 26 && isInPictureInPictureMode()) return;
         inPip = false;
+        // Radyo calarken ekran kapansa ya da baska uygulamaya gecilse de yayin surer
+        if (profile == 1 && splashDone && player != null && !pickerShowing) {
+            radioBackground = true;
+            try {
+                Intent si = new Intent(this, RadioService.class);
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(si); else startService(si);
+                controlsVisible = false;
+                touchControls.setVisibility(View.GONE);
+                if (panels != null) panels.hideNow();
+                return;
+            } catch (Throwable t) {
+                radioBackground = false;   // servis baslamazsa normal davran: yayini durdur
+            }
+        }
         stopPlayer();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (radioBackground) stopService(new Intent(this, RadioService.class));
+        if (player != null) {
+            playerView.setPlayer(null);
+            player.release();
+            player = null;
+        }
+        if (sInstance != null && sInstance.get() == this) sInstance = null;
+    }
+
+    /** Bildirimdeki "Durdur" dugmesi. */
+    static void stopRadioFromNotification() {
+        MainActivity a = sInstance == null ? null : sInstance.get();
+        if (a == null) return;
+        a.radioBackground = false;
+        a.radioStoppedByUser = true;
+        a.stopPlayer();
     }
 
     @Override
@@ -261,7 +311,7 @@ public class MainActivity extends Activity {
     private void startPlayer() {
         if (player != null) return;
 
-        currentUrl = prefs.getString("url", DEFAULT_URL);
+        currentUrl = urlFor(Math.max(profile, 0));
 
         DefaultHttpDataSource.Factory httpFactory = new DefaultHttpDataSource.Factory()
                 .setUserAgent("Mozilla/5.0 (Linux; Android TV) TVOynatici/1.0")
@@ -271,6 +321,12 @@ public class MainActivity extends Activity {
 
         player = new ExoPlayer.Builder(this)
                 .setMediaSourceFactory(new DefaultMediaSourceFactory(httpFactory))
+                .setAudioAttributes(new androidx.media3.common.AudioAttributes.Builder()
+                        .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                        .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .build(), true)
+                .setHandleAudioBecomingNoisy(true)
+                .setWakeMode(androidx.media3.common.C.WAKE_MODE_NETWORK)
                 .build();
         playerView.setPlayer(player);
         applyVolume();
@@ -293,7 +349,7 @@ public class MainActivity extends Activity {
             public void onPlayerError(PlaybackException error) {
                 scheduleWait(0);
                 handler.postDelayed(() -> {
-                    if (player != null) {
+                    if (player != null && profile >= 0 && !currentUrl.isEmpty()) {
                         player.setMediaItem(buildItem(currentUrl));
                         player.prepare();
                         player.setPlayWhenReady(splashDone);
@@ -303,19 +359,25 @@ public class MainActivity extends Activity {
         });
 
         // Acilis animasyonu bitene kadar yayin arka planda hazirlanir ama oynatilmaz
-        player.setMediaItem(buildItem(currentUrl));
-        player.setPlayWhenReady(splashDone);
-        player.prepare();
+        if (profile >= 0 && !currentUrl.isEmpty()) {
+            player.setMediaItem(buildItem(currentUrl));
+            player.setPlayWhenReady(splashDone);
+            player.prepare();
+        }
 
         handler.post(pollTask);
         updateGlowState();
     }
 
     private MediaItem buildItem(String url) {
-        return new MediaItem.Builder()
-                .setUri(url)
-                .setMimeType(MimeTypes.APPLICATION_M3U8)
-                .build();
+        MediaItem.Builder b = new MediaItem.Builder().setUri(url);
+        // TV yayini HLS; radyo mp3/aac/HLS olabilir, bicimi kendisi bulsun
+        if (profile != 1 || url.toLowerCase().contains(".m3u8")) b.setMimeType(MimeTypes.APPLICATION_M3U8);
+        return b.build();
+    }
+
+    private String urlFor(int prof) {
+        return prof == 1 ? prefs.getString("url_radio", "") : prefs.getString("url", DEFAULT_URL);
     }
 
     private void stopPlayer() {
@@ -465,20 +527,99 @@ public class MainActivity extends Activity {
 
     private void endSplash() {
         splashRunning = false;
-        splashDone = true;
         if (textPulse != null) textPulse.cancel();
-        if (player != null) {
-            applyVolume();
-            player.setPlayWhenReady(true);
-            // Yayin acilis bitince hala hazir degilse bekleme ekranini goster
-            if (player.getPlaybackState() != Player.STATE_READY) scheduleWait(1200);
-        }
+        // Acilis bitti: profil secimi gelir. Yayin, secimden sonra baslar.
+        pickerShowing = true;
+        picker.show();
         splashLayer.animate().alpha(0f).setDuration(800).withEndAction(() -> {
             splashLayer.setVisibility(View.GONE);
             splashParticles.setVisibility(View.GONE);
         }).start();
-        showLiveBadge();
-        afterSplashNotifications();
+    }
+
+    // ------------------------------------------------------------------ Profiller (Ruha TV / Radyo Ruha)
+
+    private void setupProfiles() {
+        FrameLayout r = findViewById(R.id.root);
+        radioView = new RadioView(this);
+        r.addView(radioView, 1, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        picker = new ProfilePicker(this, !isTv, this::chooseProfile);
+        r.addView(picker, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        loadRadioLogo();
+
+        View sw = findViewById(R.id.btn_profile);
+        if (sw != null) sw.setOnClickListener(v -> {
+            hideControls();
+            openPicker();
+        });
+    }
+
+    private void chooseProfile(int p) {
+        profile = p;
+        pickerShowing = false;
+        splashDone = true;
+        picker.hide();
+        applyProfileUi();
+        currentUrl = urlFor(p);
+        if (player != null && !currentUrl.isEmpty()) {
+            player.setMediaItem(buildItem(currentUrl));
+            player.prepare();
+            applyVolume();
+            player.setPlayWhenReady(true);
+            scheduleWait(1200);
+        }
+        if (!notifAsked) {
+            notifAsked = true;
+            afterSplashNotifications();
+        }
+    }
+
+    private void openPicker() {
+        if (!splashDone || pickerShowing) return;
+        if (infoVisible) hideInfo();
+        hideSocialNow();
+        if (panels != null) panels.hideNow();
+        hideWaitNow();
+        if (player != null) {
+            player.stop();
+            player.clearMediaItems();
+        }
+        splashDone = false;
+        pickerShowing = true;
+        picker.show();
+    }
+
+    private void applyProfileUi() {
+        boolean radio = profile == 1;
+        radioView.setVisibility(radio ? View.VISIBLE : View.GONE);
+        View pip = findViewById(R.id.btn_pip);
+        if (pip != null) pip.setVisibility(radio || Build.VERSION.SDK_INT < 26 ? View.GONE : View.VISIBLE);
+        if (aspectChip != null) aspectChip.setVisibility(radio ? View.GONE : View.VISIBLE);
+        updateGlowState();
+    }
+
+    private void loadRadioLogo() {
+        File f = new File(getFilesDir(), "radyo_logo.img");
+        if (!f.exists()) return;
+        try {
+            BitmapFactory.Options o = new BitmapFactory.Options();
+            o.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(f.getPath(), o);
+            if (o.outWidth <= 0) return;
+            int sample = 1;
+            while (o.outWidth / sample > 1200) sample *= 2;
+            BitmapFactory.Options o2 = new BitmapFactory.Options();
+            o2.inSampleSize = sample;
+            Bitmap bmp = BitmapFactory.decodeFile(f.getPath(), o2);
+            if (bmp != null) {
+                picker.setRadioLogo(bmp);
+                radioView.setLogo(bmp);
+            }
+        } catch (Throwable ignored) {
+            // Bozuk dosya: yazi gorunur
+        }
     }
 
     private void showLiveBadge() {
@@ -623,6 +764,11 @@ public class MainActivity extends Activity {
             return true;
         }
 
+        if (isTv && down && code == KeyEvent.KEYCODE_BACK) {
+            openPicker();   // TV'de geri tusu profil secimine doner
+            return true;
+        }
+
         if (okKey) {
             if (down && e.getRepeatCount() == 0) showInfo();
             return true;
@@ -657,7 +803,27 @@ public class MainActivity extends Activity {
                 }
             }
             final String newUrl = link;
-            if (newUrl != null) handler.post(() -> applyUrl(newUrl));
+            if (newUrl != null) handler.post(() -> applyRemoteUrl(0, newUrl));
+        }
+
+        // 1b) Radyo yayin linki
+        String rcfg = firstLine(httpGet(RADIO_CFG_URL));
+        if (rcfg != null && rcfg.startsWith("http")) {
+            final String ru = rcfg;
+            handler.post(() -> applyRemoteUrl(1, ru));
+        }
+
+        // 1c) Radyo logosu
+        String rl = firstLine(httpGet(RADIO_LOGO_CFG_URL));
+        if (rl != null && rl.startsWith("http")) {
+            String img = normalizeImageUrl(rl);
+            File lf = new File(getFilesDir(), "radyo_logo.img");
+            if (!lf.exists() || !img.equals(prefs.getString("radio_logo_url", ""))) {
+                if (downloadImage(img, "radyo_logo")) {
+                    prefs.edit().putString("radio_logo_url", img).apply();
+                    handler.post(this::loadRadioLogo);
+                }
+            }
         }
 
         // 2) Genel bilgi metni
@@ -689,8 +855,7 @@ public class MainActivity extends Activity {
 
         // 3) Acilis gorseli (bir sonraki acilista gorunur)
         String first = firstLine(httpGet(SPLASH_CFG_URL));
-        if (first == null) first = firstLine(httpGet(SPLASH_CFG_URL_OLD));
-        if (first != null) {
+                if (first != null) {
             String saved = prefs.getString("splash_url", "");
             if (first.equalsIgnoreCase("yok") || first.equalsIgnoreCase("varsayilan")) {
                 if (!saved.isEmpty()) {
@@ -748,8 +913,12 @@ public class MainActivity extends Activity {
     }
 
     private boolean downloadSplash(String urlStr) {
+        return downloadImage(urlStr, "acilis");
+    }
+
+    private boolean downloadImage(String urlStr, String name) {
         HttpURLConnection c = null;
-        File tmp = new File(getFilesDir(), "acilis.tmp");
+        File tmp = new File(getFilesDir(), name + ".tmp");
         try {
             c = (HttpURLConnection) new URL(urlStr).openConnection();
             c.setConnectTimeout(10000);
@@ -773,7 +942,7 @@ public class MainActivity extends Activity {
             o.inJustDecodeBounds = true;
             BitmapFactory.decodeFile(tmp.getPath(), o);
             if (o.outWidth <= 0 || o.outHeight <= 0) return false;   // gecerli resim degil
-            File dst = new File(getFilesDir(), "acilis.img");
+            File dst = new File(getFilesDir(), name + ".img");
             if (dst.exists()) dst.delete();
             return tmp.renameTo(dst);
         } catch (Exception ex) {
@@ -814,10 +983,14 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void applyRemoteUrl(int prof, String url) {
+        prefs.edit().putString(prof == 1 ? "url_radio" : "url", url).apply();
+        if (prof == profile) applyUrl(url);
+    }
+
     private void applyUrl(String url) {
-        if (player == null || url.equals(currentUrl)) return;
+        if (player == null || profile < 0 || url.equals(currentUrl)) return;
         currentUrl = url;
-        prefs.edit().putString("url", url).apply();
         player.setMediaItem(buildItem(url));
         player.prepare();
         player.setPlayWhenReady(splashDone);
@@ -1560,7 +1733,7 @@ public class MainActivity extends Activity {
     private void updateGlowState() {
         if (glowView == null) return;
         handler.removeCallbacks(glowTask);
-        boolean active = glowOn && !isTv && !inPip && aspectIndex != 1 && aspectIndex != 2
+        boolean active = glowOn && profile != 1 && !isTv && !inPip && aspectIndex != 1 && aspectIndex != 2
                 && player != null;
         glowView.setVisibility(active ? View.VISIBLE : View.GONE);
         if (active) handler.post(glowTask);

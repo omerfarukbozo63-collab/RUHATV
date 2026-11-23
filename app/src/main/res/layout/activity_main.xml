@@ -100,6 +100,18 @@
             android:padding="7dp">
 
             <ImageView
+                android:id="@+id/btn_profile"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginBottom="6dp"
+                android:background="@drawable/bg_dock_btn"
+                android:clickable="true"
+                android:contentDescription="Profil değiştir"
+                android:focusable="true"
+                android:padding="10dp"
+                android:src="@drawable/ic_switch" />
+
+            <ImageView
                 android:id="@+id/btn_pip"
                 android:layout_width="40dp"
                 android:layout_height="40dp"
