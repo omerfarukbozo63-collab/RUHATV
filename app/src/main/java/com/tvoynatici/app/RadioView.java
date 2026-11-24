@@ -33,6 +33,14 @@ public class RadioView extends FrameLayout {
         LayoutParams llp = new LayoutParams((int) (260 * d), (int) (130 * d), Gravity.CENTER);
         llp.bottomMargin = (int) (34 * d);
         addView(logo, llp);
+        android.animation.ObjectAnimator sx = android.animation.ObjectAnimator.ofFloat(logo, SCALE_X, 1f, 1.07f);
+        android.animation.ObjectAnimator sy = android.animation.ObjectAnimator.ofFloat(logo, SCALE_Y, 1f, 1.07f);
+        for (android.animation.ObjectAnimator an : new android.animation.ObjectAnimator[]{sx, sy}) {
+            an.setDuration(1400);
+            an.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            an.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+            an.start();
+        }
 
         fallback = new TextView(c);
         fallback.setText("RADYO RUHA");

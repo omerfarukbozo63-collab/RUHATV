@@ -542,7 +542,7 @@ public class MainActivity extends Activity {
     private void setupProfiles() {
         FrameLayout r = findViewById(R.id.root);
         radioView = new RadioView(this);
-        r.addView(radioView, 1, new FrameLayout.LayoutParams(
+        r.addView(radioView, r.indexOfChild(playerView) + 1, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         picker = new ProfilePicker(this, !isTv, this::chooseProfile);
         r.addView(picker, new FrameLayout.LayoutParams(
@@ -594,6 +594,7 @@ public class MainActivity extends Activity {
     private void applyProfileUi() {
         boolean radio = profile == 1;
         radioView.setVisibility(radio ? View.VISIBLE : View.GONE);
+        playerView.setVisibility(radio ? View.INVISIBLE : View.VISIBLE);
         View pip = findViewById(R.id.btn_pip);
         if (pip != null) pip.setVisibility(radio || Build.VERSION.SDK_INT < 26 ? View.GONE : View.VISIBLE);
         if (aspectChip != null) aspectChip.setVisibility(radio ? View.GONE : View.VISIBLE);
